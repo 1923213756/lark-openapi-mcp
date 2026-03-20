@@ -11,6 +11,8 @@ export const mcpServerOptionSchema = z.object({
   language: z.enum(['zh', 'en']).optional(),
   toolNameCase: z.enum(['snake', 'camel']).optional(),
   tokenMode: z.enum(['auto', 'user_access_token', 'tenant_access_token']).optional(),
+  publicBaseUrl: z.string().optional(),
+  oauthBasePath: z.string().optional(),
 });
 
 export interface McpServerOptions {
@@ -28,6 +30,9 @@ export interface McpServerOptions {
   mode?: McpServerTransport;
   host?: string;
   port?: number;
+  publicBaseUrl?: string;
+  oauthBasePath?: string;
+  resourceServerUrl?: string;
 }
 
 export type InitTransportServerFunction = (

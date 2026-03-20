@@ -1,15 +1,22 @@
+import crypto from 'crypto';
 import { Response } from 'express';
 import { OAuthRegisteredClientsStore } from '@modelcontextprotocol/sdk/server/auth/clients.js';
+import { InvalidGrantError, InvalidTokenError } from '@modelcontextprotocol/sdk/server/auth/errors.js';
 import { OAuthClientInformationFull, OAuthTokens } from '@modelcontextprotocol/sdk/shared/auth.js';
 import { AuthorizationParams, OAuthServerProvider } from '@modelcontextprotocol/sdk/server/auth/provider.js';
 import { AuthInfo } from '@modelcontextprotocol/sdk/server/auth/types.js';
-import { authStore } from '../store';
-import { isTokenValid } from '../utils/is-token-valid';
-import { generateCodeChallenge } from '../utils/pkce';
 import { z } from 'zod';
+import { authStore } from '../store';
 import { LarkProxyOAuthServerProviderOptions } from './types';
 import { commonHttpInstance } from '../../utils/http-instance';
 import { logger } from '../../utils/logger';
+import {
+  fetchLarkUserInfo,
+  getScopes,
+  issueMcpSessionTokens,
+  rotateMcpSessionTokens,
+  upsertLarkCredential,
+} from './shared';
 
 const LarkOIDCTokenSchema = z.object({
   code: z.number(),
@@ -34,14 +41,11 @@ interface OAuth2OAuthEndpoints {
 
 export class LarkOIDC2OAuthServerProvider implements OAuthServerProvider {
   private readonly _endpoints: OAuth2OAuthEndpoints;
-
   private readonly _options: LarkProxyOAuthServerProviderOptions;
-
-  skipLocalPkceValidation = true;
+  skipLocalPkceValidation = false;
 
   constructor(options: LarkProxyOAuthServerProviderOptions) {
     const { domain } = options;
-
     this._endpoints = {
       appAccessTokenUrl: `${domain}/open-apis/auth/v3/app_access_token/internal`,
       authorizationUrl: `${domain}/open-apis/authen/v1/index`,
@@ -56,111 +60,182 @@ export class LarkOIDC2OAuthServerProvider implements OAuthServerProvider {
     return authStore;
   }
 
-  async authorize(client: OAuthClientInformationFull, params: AuthorizationParams, res: Response): Promise<void> {
-    const targetUrl = new URL(this._endpoints.authorizationUrl);
-    const searchParams = new URLSearchParams({
-      app_id: this._options.appId,
-      redirect_uri: this._options.callbackUrl + '?redirect_uri=' + client.redirect_uris[0],
+  private generateTxId() {
+    return crypto.randomUUID();
+  }
+
+  private isDirectAccessTokenClient(client: OAuthClientInformationFull) {
+    return client.client_id === 'LOCAL' || client.client_id === 'client_id_for_local_auth';
+  }
+
+  private buildCallbackUrl(txId: string) {
+    const callbackUrl = new URL(this._options.callbackUrl);
+    callbackUrl.searchParams.set('tx_id', txId);
+    return callbackUrl.toString();
+  }
+
+  private async getAppAccessToken(appId: string, appSecret: string) {
+    const response = await commonHttpInstance.post(
+      this._endpoints.appAccessTokenUrl,
+      { app_id: appId, app_secret: appSecret },
+      { headers: { 'Content-Type': 'application/json; charset=utf-8' } },
+    );
+    return response.data.app_access_token as string;
+  }
+
+  private async exchangeLarkAuthorizationCode(authorizationCode: string) {
+    const appAccessToken = await this.getAppAccessToken(this._options.appId, this._options.appSecret);
+    const response = await commonHttpInstance.post(
+      this._endpoints.tokenUrl,
+      { grant_type: 'authorization_code', code: authorizationCode },
+      { headers: { 'Content-Type': 'application/json; charset=utf-8', Authorization: `Bearer ${appAccessToken}` } },
+    );
+
+    const data = response.data;
+    const parseResult = LarkOIDCTokenSchema.safeParse(data);
+    if (!parseResult.success) {
+      throw new Error(`Token parse failed: invalid response: ${data?.code}, ${data?.msg}`);
+    }
+    return parseResult.data;
+  }
+
+  private async refreshLarkToken(refreshToken: string) {
+    const originalToken = await authStore.getTokenByRefreshToken(refreshToken);
+    if (!originalToken) {
+      throw new InvalidGrantError('refresh token is invalid');
+    }
+
+    const appId = (originalToken.extra?.appId as string) || this._options.appId;
+    const appSecret = (originalToken.extra?.appSecret as string) || this._options.appSecret;
+    const appAccessToken = await this.getAppAccessToken(appId, appSecret);
+    const response = await commonHttpInstance.post(
+      this._endpoints.refreshTokenUrl,
+      { grant_type: 'refresh_token', refresh_token: refreshToken },
+      { headers: { 'Content-Type': 'application/json; charset=utf-8', Authorization: `Bearer ${appAccessToken}` } },
+    );
+
+    const data = response.data;
+    const parseResult = LarkOIDCTokenSchema.safeParse(data);
+    if (!parseResult.success) {
+      throw new Error(`Token parse failed: invalid response: ${data?.code}, ${data?.msg}`);
+    }
+
+    const token = parseResult.data;
+    const credentialId = originalToken.extra?.credentialId as string | undefined;
+    const userInfo = await fetchLarkUserInfo(this._options.domain, token.data.access_token);
+    await upsertLarkCredential({
+      existingCredentialId: credentialId,
+      client: { client_id: originalToken.clientId, redirect_uris: [this._options.callbackUrl] },
+      appId,
+      appSecret,
+      tokenPayload: {
+        accessToken: token.data.access_token,
+        refreshToken: token.data.refresh_token,
+        expiresIn: token.data.expires_in,
+        refreshExpiresIn: token.data.refresh_expires_in,
+        scope: token.data.scope,
+      },
+      userInfo,
+      rawToken: token,
     });
-    if (params.state) {
-      searchParams.set('state', params.state);
-    }
-    if (params.codeChallenge) {
-      authStore.storeCodeVerifier(`challenge_${client.client_id}`, params.codeChallenge);
-    }
-    targetUrl.search = searchParams.toString();
+
+    await authStore.removeToken(originalToken.token);
+    return token;
+  }
+
+  async authorize(client: OAuthClientInformationFull, params: AuthorizationParams, res: Response): Promise<void> {
+    const txId = this.generateTxId();
+    const callbackUrl = this.buildCallbackUrl(txId);
+    const targetUrl = new URL(this._endpoints.authorizationUrl);
+
+    await authStore.storeTransaction({
+      txId,
+      clientId: client.client_id,
+      redirectUri: params.redirectUri,
+      callbackUrl,
+      state: params.state,
+      codeChallenge: params.codeChallenge,
+      scopes: params.scopes || [],
+      expiresAt: Math.floor(Date.now() / 1000) + authStore.getTransactionTTL(),
+    });
+
+    targetUrl.searchParams.set('app_id', this._options.appId);
+    targetUrl.searchParams.set('redirect_uri', callbackUrl);
+    targetUrl.searchParams.set('state', txId);
+
     logger.info(`[LarkOIDC2OAuthServerProvider] Redirecting to authorization URL: ${targetUrl.toString()}`);
     res.redirect(targetUrl.toString());
   }
 
   async challengeForAuthorizationCode(
-    _client: OAuthClientInformationFull,
-    _authorizationCode: string,
+    client: OAuthClientInformationFull,
+    authorizationCode: string,
   ): Promise<string> {
-    return '';
+    const transaction = await authStore.getTransaction(authorizationCode);
+    if (!transaction || transaction.clientId !== client.client_id) {
+      throw new InvalidGrantError('authorization code is invalid');
+    }
+    if (transaction.expiresAt < Date.now() / 1000) {
+      throw new InvalidGrantError('authorization code has expired');
+    }
+    return transaction.codeChallenge;
   }
 
   async exchangeAuthorizationCode(
     client: OAuthClientInformationFull,
     authorizationCode: string,
-    codeVerifier?: string,
-    _redirectUri?: string,
+    _codeVerifier?: string,
+    redirectUri?: string,
   ): Promise<OAuthTokens> {
-    if (codeVerifier) {
-      const storedChallenge = authStore.getCodeVerifier(`challenge_${client.client_id}`);
-      if (!storedChallenge) {
-        logger.error(
-          `[LarkOIDC2OAuthServerProvider] exchangeAuthorizationCode: PKCE validation failed: code challenge not found`,
-        );
-        throw new Error('PKCE validation failed: code challenge not found');
-      }
-      const expectedChallenge = generateCodeChallenge(codeVerifier);
-      if (expectedChallenge !== storedChallenge) {
-        logger.error(
-          `[LarkOIDC2OAuthServerProvider] exchangeAuthorizationCode: PKCE validation failed: code verifier does not match challenge`,
-        );
-        throw new Error('PKCE validation failed: code verifier does not match challenge');
-      }
-      authStore.removeCodeVerifier(`challenge_${client.client_id}`);
+    const transaction = await authStore.getTransaction(authorizationCode);
+    if (!transaction || transaction.clientId !== client.client_id) {
+      throw new InvalidGrantError('authorization code is invalid');
+    }
+    if (transaction.expiresAt < Date.now() / 1000) {
+      throw new InvalidGrantError('authorization code has expired');
+    }
+    if (transaction.consumedAt) {
+      throw new InvalidGrantError('authorization code already used');
+    }
+    if (redirectUri && redirectUri !== transaction.redirectUri) {
+      throw new InvalidGrantError('redirect_uri mismatch');
+    }
+    if (!transaction.larkCode) {
+      throw new InvalidGrantError('upstream authorization code not found');
     }
 
-    const params: Record<string, string> = {
-      grant_type: 'authorization_code',
-      code: authorizationCode,
-    };
-
     try {
-      logger.info(
-        `[LarkOIDC2OAuthServerProvider] Exchanging authorization code for client ${client.client_id}; appId: ${this._options.appId}`,
-      );
-      const appAccessTokenResponse = await commonHttpInstance.post(
-        this._endpoints.appAccessTokenUrl,
-        { app_id: this._options.appId, app_secret: this._options.appSecret },
-        { headers: { 'Content-Type': 'application/json; charset=utf-8' } },
-      );
-
-      const { app_access_token: appAccessToken } = appAccessTokenResponse.data;
-
-      const response = await commonHttpInstance.post(this._endpoints.tokenUrl, params, {
-        headers: { 'Content-Type': 'application/json; charset=utf-8', Authorization: `Bearer ${appAccessToken}` },
-      });
-
-      const data = response.data;
-      const parseResult = LarkOIDCTokenSchema.safeParse(data);
-      if (!parseResult.success) {
-        throw new Error(`Token parse failed: invalid response: ${data?.code}, ${data?.msg}`);
-      }
-
-      const token = parseResult.data;
-      const expiresAt = token.data.expires_in ? token.data.expires_in + Date.now() / 1000 : undefined;
-
-      await authStore.storeToken({
-        clientId: client.client_id,
-        token: token.data.access_token,
-        scopes: token.data.scope?.split(' ') || [],
-        expiresAt,
-        extra: {
+      const token = await this.exchangeLarkAuthorizationCode(transaction.larkCode);
+      const userInfo = await fetchLarkUserInfo(this._options.domain, token.data.access_token);
+      const credential = await upsertLarkCredential({
+        client,
+        appId: this._options.appId,
+        appSecret: this._options.appSecret,
+        tokenPayload: {
+          accessToken: token.data.access_token,
           refreshToken: token.data.refresh_token,
-          token,
-          appId: this._options.appId,
-          appSecret: this._options.appSecret,
+          expiresIn: token.data.expires_in,
+          refreshExpiresIn: token.data.refresh_expires_in,
+          scope: token.data.scope,
         },
+        userInfo,
+        rawToken: token,
       });
 
-      logger.info(
-        `[LarkOIDC2OAuthServerProvider] Successfully exchanged authorization code for client ${client.client_id}; appId: ${this._options.appId}; token: ${Boolean(token.data.access_token)}; refreshToken: ${Boolean(token.data.refresh_token)};expiresAt: ${expiresAt}`,
-      );
-
-      return {
-        access_token: token.data.access_token,
-        token_type: token.data.token_type,
-        expires_in: token.data.expires_in,
-        scope: token.data.scope,
-        refresh_token: token.data.refresh_token,
-      };
+      await authStore.updateTransaction(transaction.txId, { consumedAt: Math.floor(Date.now() / 1000) });
+      if (this.isDirectAccessTokenClient(client)) {
+        return {
+          access_token: token.data.access_token,
+          refresh_token: token.data.refresh_token,
+          token_type: token.data.token_type,
+          expires_in: token.data.expires_in,
+          scope: token.data.scope,
+        };
+      }
+      return issueMcpSessionTokens({ client, credential, scopes: getScopes(token.data.scope, transaction.scopes) });
     } catch (error: any) {
       logger.error(
-        `[LarkOIDC2OAuthServerProvider] exchangeAuthorizationCode: Token exchange failed: ${error.response?.status || error.status} ${error.response?.data || error.message}`,
+        `[LarkOIDC2OAuthServerProvider] exchangeAuthorizationCode failed: ${error.response?.status || error.status} ${error.response?.data || error.message}`,
       );
       throw new Error(
         `Token exchange failed: ${error.response?.status || error.status} ${error.response?.data || error.message}`,
@@ -171,82 +246,61 @@ export class LarkOIDC2OAuthServerProvider implements OAuthServerProvider {
   async exchangeRefreshToken(
     client: OAuthClientInformationFull,
     refreshToken: string,
-    _scopes?: string[],
+    scopes?: string[],
   ): Promise<OAuthTokens> {
-    const originalToken = await authStore.getTokenByRefreshToken(refreshToken);
-    if (!originalToken) {
-      logger.error(`[LarkOIDC2OAuthServerProvider] exchangeRefreshToken: Refresh token is invalid`);
-      throw new Error('refresh token is invalid');
-    }
-
-    const appId = (originalToken.extra?.app_id as string) || this._options.appId;
-    const appSecret = (originalToken.extra?.app_secret as string) || this._options.appSecret;
-
-    try {
-      logger.info(`[LarkOIDC2OAuthServerProvider] Refreshing token for client ${client.client_id}`);
-      const appAccessTokenResponse = await commonHttpInstance.post(
-        this._endpoints.appAccessTokenUrl,
-        { app_id: appId, app_secret: appSecret },
-        { headers: { 'Content-Type': 'application/json; charset=utf-8' } },
-      );
-
-      const { app_access_token: appAccessToken } = appAccessTokenResponse.data;
-
-      const response = await commonHttpInstance.post(
-        this._endpoints.refreshTokenUrl,
-        { grant_type: 'refresh_token', refresh_token: refreshToken },
-        { headers: { 'Content-Type': 'application/json; charset=utf-8', Authorization: `Bearer ${appAccessToken}` } },
-      );
-
-      const data = response.data;
-      
-      const parseResult = LarkOIDCTokenSchema.safeParse(data);
-      if (!parseResult.success) {
-        throw new Error(`Token parse failed: invalid response: ${data?.code}, ${data?.msg}`);
-      }
-      const token = parseResult.data;
-      const expiresAt = token.data.expires_in ? token.data.expires_in + Date.now() / 1000 : undefined;
-
-      await authStore.storeToken({
-        clientId: client.client_id,
-        token: token.data.access_token,
-        scopes: token.data.scope?.split(' ') || [],
-        expiresAt,
-        extra: { refreshToken: token.data.refresh_token, token, appId, appSecret },
-      });
-
-      logger.info(
-        `[LarkOIDC2OAuthServerProvider] Successfully refreshed token for client ${client.client_id}; appId: ${appId}; token: ${Boolean(token.data.access_token)}; refreshToken: ${Boolean(token.data.refresh_token)};expiresAt: ${expiresAt}`,
-      );
-
+    const session = await authStore.getMcpSessionByRefreshToken(refreshToken);
+    if (!session) {
+      const token = await this.refreshLarkToken(refreshToken);
       return {
         access_token: token.data.access_token,
+        refresh_token: token.data.refresh_token,
         token_type: token.data.token_type,
         expires_in: token.data.expires_in,
         scope: token.data.scope,
-        refresh_token: token.data.refresh_token,
       };
-    } catch (error: any) {
-      logger.error(
-        `[LarkOIDC2OAuthServerProvider] exchangeRefreshToken: Token refresh failed: ${error.response?.status || error.status} ${error.response?.data || error.message}`,
-      );
-      throw new Error(
-        `Token refresh failed: ${error.response?.status || error.status} ${error.response?.data || error.message}`,
-      );
     }
+
+    const credentialId = session.extra?.credentialId as string | undefined;
+    if (!credentialId) {
+      throw new InvalidGrantError('credentialId missing from session');
+    }
+
+    const credential = await authStore.getLarkCredential(credentialId);
+    if (!credential) {
+      throw new InvalidGrantError('lark credential not found');
+    }
+
+    if (credential.expiresAt && credential.expiresAt < Date.now() / 1000) {
+      if (!credential.refreshToken) {
+        throw new InvalidGrantError('lark refresh token not found');
+      }
+      const refreshedToken = await this.refreshLarkToken(credential.refreshToken);
+      const refreshedCredential = await authStore.getLarkCredential(credentialId);
+      if (!refreshedCredential) {
+        throw new InvalidGrantError('lark credential not found after refresh');
+      }
+      await authStore.removeMcpSession(session.token);
+      return issueMcpSessionTokens({
+        client,
+        credential: refreshedCredential,
+        scopes: getScopes(refreshedToken.data.scope, scopes || session.scopes),
+      });
+    }
+
+    return rotateMcpSessionTokens(session);
   }
 
   async verifyAccessToken(token: string): Promise<AuthInfo> {
-    const { valid, token: storedToken } = await isTokenValid(token);
-    if (!valid) {
-      return {
-        token: storedToken?.token || '',
-        clientId: storedToken?.clientId || '',
-        scopes: storedToken?.scopes || [],
-        expiresAt: storedToken?.expiresAt || 1,
-        extra: storedToken?.extra || {},
-      };
+    const session = await authStore.getMcpSession(token);
+    if (session) {
+      return session;
     }
-    return storedToken!;
+
+    const storedToken = await authStore.getToken(token);
+    if (storedToken) {
+      return storedToken;
+    }
+
+    throw new InvalidTokenError('Invalid access token');
   }
 }

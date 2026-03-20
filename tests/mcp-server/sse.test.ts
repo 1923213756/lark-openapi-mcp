@@ -307,7 +307,9 @@ describe('initSSEServer', () => {
     initSSEServer(() => mockServer, options);
 
     // 验证错误被记录并且进程退出
-    expect(console.error).toHaveBeenCalledWith('[SSEServerTransport] Server error: Error: Port already in use');
+    expect(console.error).toHaveBeenCalledWith(
+      expect.stringContaining('[SSEServerTransport] Server error: Error: Port already in use'),
+    );
     expect(process.exit).toHaveBeenCalledWith(1);
   });
 

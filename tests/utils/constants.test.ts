@@ -30,6 +30,7 @@ describe('Constants', () => {
         mode: 'stdio',
         host: 'localhost',
         port: '3000',
+        oauthBasePath: '/oauth',
       });
     });
   });

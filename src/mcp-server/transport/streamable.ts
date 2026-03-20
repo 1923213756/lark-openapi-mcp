@@ -22,7 +22,10 @@ export const initStreamableServer: InitTransportServerFunction = (
   let authHandler: LarkAuthHandler | undefined;
 
   if (!userAccessToken && needAuthFlow) {
-    authHandler = new LarkAuthHandler(app, options);
+    authHandler = new LarkAuthHandler(app, {
+      ...options,
+      resourceServerUrl: options.publicBaseUrl ? new URL('/mcp', options.publicBaseUrl).toString() : undefined,
+    });
     if (oauth) {
       authHandler.setupRoutes();
     }
@@ -41,9 +44,16 @@ export const initStreamableServer: InitTransportServerFunction = (
   };
 
   app.post('/mcp', authMiddleware, async (req: Request, res: Response) => {
-    const token = req.auth?.token;
+    const bearerToken = req.auth?.token;
+    const resolvedUserAccessToken =
+      authHandler && oauth && typeof authHandler.resolveUserAccessToken === 'function'
+        ? await authHandler.resolveUserAccessToken(bearerToken)
+        : bearerToken;
     const { data } = parseMCPServerOptionsFromRequest(req);
-    const server = getNewServer({ ...options, ...data, userAccessToken: data.userAccessToken || token }, authHandler);
+    const server = getNewServer(
+      { ...options, ...data, userAccessToken: data.userAccessToken || resolvedUserAccessToken },
+      authHandler,
+    );
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
     res.on('close', () => {
       transport.close();

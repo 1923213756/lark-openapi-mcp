@@ -43,6 +43,12 @@ export class StorageManager {
   }
 
   private async initializeEncryption(): Promise<void> {
+    const envKey = process.env[AUTH_CONFIG.ENV_AES_KEY_NAME];
+    if (envKey) {
+      this.encryptionUtil = new EncryptionUtil(envKey);
+      return;
+    }
+
     try {
       const keytar = await import('keytar');
       let key = await keytar.getPassword(AUTH_CONFIG.SERVER_NAME, AUTH_CONFIG.AES_KEY_NAME);

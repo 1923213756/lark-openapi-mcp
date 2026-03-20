@@ -17,6 +17,7 @@ export const OAPI_MCP_DEFAULT_ARGS = {
   mode: 'stdio',
   host: 'localhost',
   port: '3000',
+  oauthBasePath: '/oauth',
 };
 
 export const OAPI_MCP_ENV_ARGS = cleanEnvArgs({
@@ -26,6 +27,8 @@ export const OAPI_MCP_ENV_ARGS = cleanEnvArgs({
   tokenMode: process.env.LARK_TOKEN_MODE,
   tools: process.env.LARK_TOOLS,
   domain: process.env.LARK_DOMAIN,
+  publicBaseUrl: process.env.LARK_PUBLIC_BASE_URL,
+  oauthBasePath: process.env.LARK_OAUTH_BASE_PATH,
 });
 
 export enum OAPI_MCP_ERROR_CODE {

@@ -53,6 +53,11 @@ export class LarkAuthHandlerLocal extends LarkAuthHandler {
   }
 
   protected async callback(req: Request, res: Response) {
+    if (req.query.tx_id) {
+      await super.callback(req, res);
+      return;
+    }
+
     if (!req.query.code || typeof req.query.code !== 'string') {
       logger.error(`[LarkAuthHandlerLocal] callback: Failed to exchange authorization code: ${req.query.code}`);
       res.end('error, failed to exchange authorization code, please try again');
@@ -118,7 +123,7 @@ export class LarkAuthHandlerLocal extends LarkAuthHandler {
       const { codeVerifier, codeChallenge } = generatePKCEPair();
       authStore.storeCodeVerifier(LarkAuthHandlerLocal.LOCAL_CLIENT_ID, codeVerifier);
 
-      const authorizeUrl = new URL(`http://${this.options.host}:${this.options.port}/authorize`);
+      const authorizeUrl = new URL(this.authorizePath, this.baseUrl);
       authorizeUrl.searchParams.set('client_id', LarkAuthHandlerLocal.LOCAL_CLIENT_ID);
       authorizeUrl.searchParams.set('response_type', 'code');
       authorizeUrl.searchParams.set('code_challenge', codeChallenge);

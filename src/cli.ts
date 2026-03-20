@@ -94,6 +94,8 @@ program
   .option('-m, --mode <mode>', '(Optional) Transport Mode, stdio or sse or streamable (default: "stdio")')
   .option('--host <host>', '(Optional) Host to listen (default: "localhost")')
   .option('-p, --port <port>', '(Optional) Port to listen (default: "3000")')
+  .option('--public-base-url <publicBaseUrl>', '(Optional) Public HTTP base URL for OAuth callbacks in service mode')
+  .option('--oauth-base-path <oauthBasePath>', '(Optional) OAuth base path (default: "/oauth")')
   .option('--config <configPath>', '(Optional) Config file path (JSON)')
   .option('--debug', '(Optional) Enable debug mode')
   .action(async (options) => {

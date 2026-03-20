@@ -5,4 +5,6 @@ export interface LarkProxyOAuthServerProviderOptions {
   appId: string;
   appSecret: string;
   callbackUrl: string;
+  publicBaseUrl?: string;
+  oauthBasePath?: string;
 }

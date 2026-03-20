@@ -22,7 +22,10 @@ export const initSSEServer: InitTransportServerFunction = (
   let authHandler: LarkAuthHandler | undefined;
 
   if (!userAccessToken && needAuthFlow) {
-    authHandler = new LarkAuthHandler(app, options);
+    authHandler = new LarkAuthHandler(app, {
+      ...options,
+      resourceServerUrl: options.publicBaseUrl ? new URL('/sse', options.publicBaseUrl).toString() : undefined,
+    });
     if (oauth) {
       authHandler.setupRoutes();
     }
@@ -43,9 +46,16 @@ export const initSSEServer: InitTransportServerFunction = (
   app.get('/sse', authMiddleware, async (req: Request, res: Response) => {
     logger.info(`[SSEServerTransport] Received GET SSE request`);
 
-    const token = req.auth?.token;
+    const bearerToken = req.auth?.token;
+    const resolvedUserAccessToken =
+      authHandler && oauth && typeof authHandler.resolveUserAccessToken === 'function'
+        ? await authHandler.resolveUserAccessToken(bearerToken)
+        : bearerToken;
     const { data } = parseMCPServerOptionsFromRequest(req);
-    const server = getNewServer({ ...options, ...data, userAccessToken: data.userAccessToken || token }, authHandler);
+    const server = getNewServer(
+      { ...options, ...data, userAccessToken: data.userAccessToken || resolvedUserAccessToken },
+      authHandler,
+    );
     const transport = new SSEServerTransport('/messages', res);
     transports.set(transport.sessionId, transport);
 

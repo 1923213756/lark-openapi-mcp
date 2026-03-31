@@ -4,8 +4,30 @@ import { InitTransportServerFunction } from '../shared';
 import { parseMCPServerOptionsFromRequest, sendJsonRpcError } from './utils';
 import { LarkAuthHandler } from '../../auth';
 import { logger } from '../../utils/logger';
+import { authStore } from '../../auth/store';
 
-export const initStreamableServer: InitTransportServerFunction = (
+function sendStreamableJsonRpcError(
+  res: Response,
+  httpStatus: number,
+  message: string,
+  larkMcpError: string,
+  details?: Record<string, unknown>,
+) {
+  res.status(httpStatus).json({
+    jsonrpc: '2.0',
+    error: {
+      code: -32000,
+      message,
+      data: {
+        lark_mcp_error: larkMcpError,
+        ...details,
+      },
+    },
+    id: null,
+  });
+}
+
+export const initStreamableServer: InitTransportServerFunction = async (
   getNewServer,
   options,
   { needAuthFlow } = { needAuthFlow: false },
@@ -22,12 +44,19 @@ export const initStreamableServer: InitTransportServerFunction = (
   let authHandler: LarkAuthHandler | undefined;
 
   if (!userAccessToken && needAuthFlow) {
+    if (oauth && options.publicBaseUrl) {
+      await authStore.ensurePersistentStorage('Hosted OAuth mode requires persistent storage');
+    }
     authHandler = new LarkAuthHandler(app, {
       ...options,
       resourceServerUrl: options.publicBaseUrl ? new URL('/mcp', options.publicBaseUrl).toString() : undefined,
     });
     if (oauth) {
       authHandler.setupRoutes();
+      const status = await authStore.getStorageStatus();
+      logger.info(
+        `[StreamableServerTransport] OAuth storage status: ready=${status.storageReady}, persistent=${status.persistentStorage}, clients=${status.counts.clients}, sessions=${status.counts.mcpSessions}, credentials=${status.counts.larkCredentials}`,
+      );
     }
   }
 
@@ -44,6 +73,34 @@ export const initStreamableServer: InitTransportServerFunction = (
   };
 
   app.post('/mcp', authMiddleware, async (req: Request, res: Response) => {
+    const acceptHeader = req.headers.accept || '';
+    const contentType = req.headers['content-type'] || '';
+    if (
+      typeof acceptHeader !== 'string' ||
+      !acceptHeader.includes('application/json') ||
+      !acceptHeader.includes('text/event-stream')
+    ) {
+      sendStreamableJsonRpcError(
+        res,
+        406,
+        'Not Acceptable: Client must accept both application/json and text/event-stream.',
+        'invalid_accept_header',
+        { required_accept: 'application/json, text/event-stream' },
+      );
+      return;
+    }
+
+    if (typeof contentType !== 'string' || !contentType.startsWith('application/json')) {
+      sendStreamableJsonRpcError(
+        res,
+        415,
+        'Unsupported Media Type: Content-Type must be application/json.',
+        'invalid_content_type',
+        { required_content_type: 'application/json' },
+      );
+      return;
+    }
+
     const bearerToken = req.auth?.token;
     const resolvedUserAccessToken =
       authHandler && oauth && typeof authHandler.resolveUserAccessToken === 'function'
@@ -65,9 +122,10 @@ export const initStreamableServer: InitTransportServerFunction = (
   });
 
   const handleMethodNotAllowed = async (_req: Request, res: Response) => {
-    res
-      .writeHead(405)
-      .end(JSON.stringify({ jsonrpc: '2.0', error: { code: -32000, message: 'Method not allowed.' }, id: null }));
+    sendStreamableJsonRpcError(res, 405, 'Method not allowed. Use POST /mcp.', 'method_not_allowed', {
+      allowed_method: 'POST',
+      endpoint: '/mcp',
+    });
   };
 
   app.get('/mcp', async (req: Request, res: Response) => {

@@ -191,13 +191,16 @@ npx -y @larksuiteoapi/lark-mcp mcp \
   -a cli_xxxx \
   -s your_secret \
   -m streamable \
-  --host localhost \
+  --host 0.0.0.0 \
   -p 3000 \
   --oauth \
-  --token-mode user_access_token
+  --token-mode user_access_token \
+  --public-base-url http://mcp.infra.company:3000
 ```
 
-> ⚠️ **OAuth 限制**：当前带 OAuth 的 streamable 服务只支持 localhost，暂时不能广播给其他用户使用。
+> 💡 **托管 OAuth 提示**：只要 `--public-base-url` 配置为客户端可访问的 HTTP 地址，streamable OAuth 服务就可以部署在内网主机上，不局限于 `localhost`。
+>
+> ⚠️ **持久化要求**：托管 OAuth 模式必须具备可持久化的加密存储能力。若本机无法初始化凭证存储，服务会直接拒绝启动，避免重启后出现 `Invalid client_id` 或丢失会话。
 
 **MCP 客户端配置保持不变：**
 
@@ -205,11 +208,16 @@ npx -y @larksuiteoapi/lark-mcp mcp \
 {
   "mcpServers": {
     "lark-mcp": {
-      "url": "http://localhost:3000/mcp"
+      "url": "http://mcp.infra.company:3000/mcp"
     }
   }
 }
 ```
+
+可选诊断接口：
+
+- `GET http://mcp.infra.company:3000/oauth/status`
+- 用于检查 `issuer`、`callback_url`、存储是否就绪、已加载的 clients/sessions/credentials 数量。
 
 ## ⚙️ 高级配置选项
 

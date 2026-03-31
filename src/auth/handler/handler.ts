@@ -39,6 +39,10 @@ export class LarkAuthHandler {
     return `${this.authBasePath}/authorize`;
   }
 
+  protected get statusPath() {
+    return `${this.authBasePath}/status`;
+  }
+
   get callbackUrl() {
     return new URL(this.callbackPath, this.baseUrl).toString();
   }
@@ -181,6 +185,27 @@ export class LarkAuthHandler {
     res.end('error: invalid callback');
   }
 
+  protected async getOAuthStatus() {
+    const storageStatus = await authStore.getStorageStatus();
+    return {
+      oauth_enabled: true,
+      issuer: this.issuerUrl,
+      public_base_url: this.options.publicBaseUrl || null,
+      callback_url: this.callbackUrl,
+      oauth_base_path: this.authBasePath || '',
+      resource_server_url: this.options.resourceServerUrl || this.baseUrl,
+      storage_ready: storageStatus.storageReady,
+      persistent_storage: storageStatus.persistentStorage,
+      storage_file: storageStatus.storageFile,
+      initialization_error: storageStatus.initializationError || null,
+      loaded_clients: storageStatus.counts.clients,
+      loaded_tokens: storageStatus.counts.tokens,
+      loaded_mcp_sessions: storageStatus.counts.mcpSessions,
+      loaded_lark_credentials: storageStatus.counts.larkCredentials,
+      loaded_transactions: storageStatus.counts.transactions,
+    };
+  }
+
   setupRoutes = (): void => {
     logger.info(`[LarkAuthHandler] setupRoutes: issuerUrl: ${this.issuerUrl}`);
     const resourceServerUrl = this.options.resourceServerUrl
@@ -196,6 +221,9 @@ export class LarkAuthHandler {
         resourceServerUrl,
       }),
     );
+    this.app.get(this.statusPath, async (_req, res) => {
+      res.json(await this.getOAuthStatus());
+    });
     this.app.get(this.callbackPath, (req, res) => this.callback(req, res));
     if (!this.isHostedOAuth && this.callbackPath !== '/callback') {
       this.app.get('/callback', (req, res) => this.callback(req, res));

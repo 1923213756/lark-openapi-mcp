@@ -26,7 +26,9 @@
 2. 点击"开发者后台"，创建一个新应用
 3. 获取应用的App ID和App Secret，这将用于API认证
 4. 根据您的使用场景，为应用添加所需的权限
-5. 如需以用户身份调用API，请设置OAuth 2.0重定向URL为 http://localhost:3000/callback
+5. 如需以用户身份调用 API，请根据部署方式配置 OAuth 2.0 重定向 URL：
+   - 本地 `login` 登录：`http://localhost:3000/callback`
+   - 内网 HTTP 服务部署：`http://<你的内网域名或IP>:<端口>/oauth/callback`
 
 详细的应用创建和配置指南，请参考[飞书开放平台文档 - 创建应用](https://open.feishu.cn/document/home/introduction-to-custom-app-development/self-built-application-development-process#a0a7f6b0)。
 
@@ -76,11 +78,11 @@
 }
 ```
 
-如需使用**用户身份**访问 API：
-1) 在终端运行 `login`（会保存令牌，后续客户端可直接复用）。
-2) 在 MCP Client 配置中加入 `--oauth`。
+如需使用**用户身份**访问 API，有两种方式：
+1. 本地单用户使用：先在终端运行 `login`，把用户令牌保存在本机。
+2. 内网 HTTP 服务：由服务端托管用户令牌，用户在浏览器里完成授权，MCP 客户端只持有 MCP 服务自己的 session token。
 
-注意需要先在开发者后台配置应用的重定向 URL，默认是 `http://localhost:3000/callback`。
+下面先介绍本地单用户方式。此方式需要先在开发者后台配置重定向 URL 为 `http://localhost:3000/callback`。
 
 ```bash
 npx -y @larksuiteoapi/lark-mcp login -a cli_xxxx -s yyyyy
@@ -108,6 +110,92 @@ npx -y @larksuiteoapi/lark-mcp login -a cli_xxxx -s yyyyy
 ```
 
 说明：在启用 `--oauth` 时，建议显式设置 `--token-mode` 为 `user_access_token`，表示以用户访问令牌调用 API，适用于访问用户资源或需要用户授权的场景（如读取个人文档、发送 IM 消息）。若保留默认 `auto`，可能在AI推理使用 `tenant_access_token`，导致权限不足或无法访问用户私有数据。
+
+### 内网 HTTP 服务的用户授权教程
+
+如果你的 MCP 服务最终部署在内网服务器上，没有桌面环境，也不希望把 `refresh_token` 暴露给终端用户，可以使用服务端托管授权模式。
+
+这个模式的工作方式是：
+
+1. MCP 服务以 HTTP 方式部署在内网服务器上。
+2. 服务端保存飞书 `user_access_token` 和 `refresh_token`。
+3. 用户在自己的电脑浏览器里访问飞书授权页。
+4. 飞书授权完成后，浏览器回调到你的内网 MCP 服务。
+5. MCP 服务再向客户端发放自己的 session token，后续自动刷新飞书凭证。
+
+#### 第1步：在飞书开放平台配置回调地址
+
+假设你的 MCP 服务会被部署到：
+
+```text
+http://mcp.infra.company:3000
+```
+
+那么在飞书开放平台里需要配置的 OAuth 2.0 重定向 URL 应该是：
+
+```text
+http://mcp.infra.company:3000/oauth/callback
+```
+
+> 💡 提示：这里必须填写“用户浏览器能访问到的内网 HTTP 地址”，不是 `0.0.0.0`，也不是容器内部地址。
+
+#### 第2步：启动内网 HTTP MCP 服务
+
+```bash
+export APP_ID=cli_xxxx
+export APP_SECRET=your_secret
+export LARK_AUTH_ENCRYPTION_KEY=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+
+npx -y @larksuiteoapi/lark-mcp mcp \
+  -a cli_xxxx \
+  -s your_secret \
+  -m streamable \
+  --host 0.0.0.0 \
+  -p 3000 \
+  --oauth \
+  --token-mode user_access_token \
+  --public-base-url http://mcp.infra.company:3000 \
+  --oauth-base-path /oauth
+```
+
+参数说明：
+
+- `--host 0.0.0.0`：让服务在内网服务器上监听。
+- `--public-base-url`：告诉 OAuth 流程“浏览器实际访问的地址”是什么。
+- `--oauth-base-path /oauth`：授权相关路由统一挂在 `/oauth/*` 下，默认就是 `/oauth`。
+- `LARK_AUTH_ENCRYPTION_KEY`：服务端本地加密密钥，用于加密保存凭证。请使用 64 位十六进制字符串，并妥善保管。
+
+额外说明：
+
+- 托管 OAuth 模式要求可持久化的加密存储；若存储初始化失败，服务会直接拒绝启动，避免重启后丢失 `client_id`、MCP session 或飞书凭证。
+- 可通过 `GET http://mcp.infra.company:3000/oauth/status` 检查当前 `issuer`、`callback_url`、持久化状态以及已加载的 clients/sessions/credentials 数量。
+
+#### 第3步：在 MCP 客户端连接内网服务
+
+客户端不再直接保存飞书 `refresh_token`，只需要连接你的内网 MCP 服务：
+
+```json
+{
+  "mcpServers": {
+    "lark-mcp": {
+      "url": "http://mcp.infra.company:3000/mcp"
+    }
+  }
+}
+```
+
+当客户端第一次访问需要用户身份的工具时，会触发标准 MCP OAuth 流程。用户在浏览器完成授权后，后续请求就会自动使用服务端托管的飞书凭证。
+
+> 💡 注意：MCP 服务发给客户端的是自己的 `mcp_at_*` / `mcp_rt_*` session token，它们不能直接调用飞书开放平台 API，只能用于访问该 MCP 服务。
+
+#### 第4步：适用场景
+
+这种方式适合以下场景：
+
+- 内网服务器常驻部署 MCP 服务
+- 多个用户分别授权、分别使用自己的飞书身份
+- 不希望把 `refresh_token` 下发到开发机或 MCP 客户端
+- 服务端统一负责 token 存储、过期刷新和会话隔离
 
 ### 域名配置
 

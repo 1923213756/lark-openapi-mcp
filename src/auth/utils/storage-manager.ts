@@ -9,6 +9,7 @@ export class StorageManager {
   private encryptionUtil: EncryptionUtil | undefined;
   private initializePromise: Promise<void> | undefined;
   private isInitializedStorageSuccess = false;
+  private initializationError: Error | undefined;
 
   constructor() {
     this.initialize();
@@ -33,12 +34,14 @@ export class StorageManager {
       await this.initializeEncryption();
       this.ensureStorageDir();
       this.isInitializedStorageSuccess = true;
+      this.initializationError = undefined;
     } catch (error) {
       logger.warn(`[StorageManager] Failed to initialize: ${error}`);
       logger.warn(
         '[StorageManager] ⚠️ Builtin User Access Token Store will be disabled. but you can still use it with memory store',
       );
       this.isInitializedStorageSuccess = false;
+      this.initializationError = error instanceof Error ? error : new Error(String(error));
     }
   }
 
@@ -112,6 +115,23 @@ export class StorageManager {
       logger.error(`[StorageManager] Failed to save storage data: ${error}`);
       throw error;
     }
+  }
+
+  isReady(): boolean {
+    return this.isInitializedStorageSuccess;
+  }
+
+  getInitializationError(): Error | undefined {
+    return this.initializationError;
+  }
+
+  getStatus() {
+    return {
+      ready: this.isInitializedStorageSuccess,
+      persistentStorage: this.isInitializedStorageSuccess,
+      storageFile: this.storageFile,
+      initializationError: this.initializationError?.message,
+    };
   }
 }
 

@@ -5,6 +5,7 @@ import { authStore } from '../store';
 import { LarkCredential, LarkUserInfo } from '../types';
 import { commonHttpInstance } from '../../utils/http-instance';
 import { logger } from '../../utils/logger';
+import { AUTH_CONFIG } from '../config';
 
 interface SessionTokenParams {
   client: OAuthClientInformationFull;
@@ -37,6 +38,24 @@ export function getScopes(scope?: string, fallback?: string[]) {
     return scope.split(' ').filter(Boolean);
   }
   return fallback || [];
+}
+
+export function getMcpSessionExpiryWindow(credential: LarkCredential, now = nowInSeconds()) {
+  const safetyWindow = AUTH_CONFIG.OAUTH_EXPIRY_SAFETY_WINDOW_SECONDS;
+  const fallbackAccessExpiresAt = now + authStore.getMcpSessionTTL();
+  const fallbackRefreshExpiresAt = now + authStore.getMcpRefreshTTL();
+
+  const accessExpiresAt = Math.max(now + 1, (credential.expiresAt || fallbackAccessExpiresAt) - safetyWindow);
+  const refreshExpiresAt = credential.refreshExpiresAt
+    ? Math.max(now + 1, Math.min(credential.refreshExpiresAt - safetyWindow, fallbackRefreshExpiresAt))
+    : fallbackRefreshExpiresAt;
+
+  return {
+    accessExpiresAt,
+    accessExpiresIn: Math.max(1, accessExpiresAt - now),
+    refreshExpiresAt,
+    refreshExpiresIn: Math.max(1, refreshExpiresAt - now),
+  };
 }
 
 export async function fetchLarkUserInfo(domain: string, accessToken: string): Promise<LarkUserInfo | undefined> {
@@ -124,14 +143,13 @@ export async function issueMcpSessionTokens({ client, credential, scopes }: Sess
   const accessToken = generateOpaqueToken('mcp_at');
   const refreshToken = generateOpaqueToken('mcp_rt');
   const sessionScopes = scopes?.length ? scopes : credential.scopes;
-  const expiresAt = nowInSeconds() + authStore.getMcpSessionTTL();
-  const refreshExpiresAt = nowInSeconds() + authStore.getMcpRefreshTTL();
+  const { accessExpiresAt, accessExpiresIn, refreshExpiresAt } = getMcpSessionExpiryWindow(credential);
 
   const authInfo: AuthInfo = {
     clientId: client.client_id,
     token: accessToken,
     scopes: sessionScopes,
-    expiresAt,
+    expiresAt: accessExpiresAt,
     extra: {
       refreshToken,
       refreshExpiresAt,
@@ -140,13 +158,14 @@ export async function issueMcpSessionTokens({ client, credential, scopes }: Sess
     },
   };
 
+  await authStore.removeMcpSessionsByClient(client.client_id);
   await authStore.storeMcpSession(authInfo);
 
   return {
     access_token: accessToken,
     refresh_token: refreshToken,
     token_type: 'Bearer',
-    expires_in: authStore.getMcpSessionTTL(),
+    expires_in: accessExpiresIn,
     scope: sessionScopes.join(' '),
   };
 }

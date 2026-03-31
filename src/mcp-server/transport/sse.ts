@@ -4,8 +4,9 @@ import { InitTransportServerFunction } from '../shared';
 import { LarkAuthHandler } from '../../auth';
 import { parseMCPServerOptionsFromRequest } from './utils';
 import { logger } from '../../utils/logger';
+import { authStore } from '../../auth/store';
 
-export const initSSEServer: InitTransportServerFunction = (
+export const initSSEServer: InitTransportServerFunction = async (
   getNewServer,
   options,
   { needAuthFlow } = { needAuthFlow: false },
@@ -22,12 +23,19 @@ export const initSSEServer: InitTransportServerFunction = (
   let authHandler: LarkAuthHandler | undefined;
 
   if (!userAccessToken && needAuthFlow) {
+    if (oauth && options.publicBaseUrl) {
+      await authStore.ensurePersistentStorage('Hosted OAuth mode requires persistent storage');
+    }
     authHandler = new LarkAuthHandler(app, {
       ...options,
       resourceServerUrl: options.publicBaseUrl ? new URL('/sse', options.publicBaseUrl).toString() : undefined,
     });
     if (oauth) {
       authHandler.setupRoutes();
+      const status = await authStore.getStorageStatus();
+      logger.info(
+        `[SSEServerTransport] OAuth storage status: ready=${status.storageReady}, persistent=${status.persistentStorage}, clients=${status.counts.clients}, sessions=${status.counts.mcpSessions}, credentials=${status.counts.larkCredentials}`,
+      );
     }
   }
 

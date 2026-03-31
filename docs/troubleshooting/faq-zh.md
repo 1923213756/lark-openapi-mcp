@@ -16,6 +16,10 @@
 - 建议优先使用 `login` 获取并保存用户令牌。
 - 若在服务器/CI 环境使用，确保安全管理令牌并妥善刷新。
 
+补充说明：
+- `mcp_at_*` / `mcp_rt_*` 是 MCP 服务签发的 session token，不是飞书开放平台原生 `user_access_token`。
+- 这类 token 只能用于调用 MCP 服务本身，不能直接拿去请求 `https://open.feishu.cn/open-apis/*`。
+
 ### 启动 MCP 服务后调用某些 API 提示权限不足
 
 解决方案：
@@ -50,11 +54,15 @@
 解决方案：
 - 检查端口占用情况，必要时更换端口。
 - 确保客户端正确连接到对应端点并能处理事件流。
+- Streamable 模式下请使用 `POST /mcp`，并带上：
+  - `Content-Type: application/json`
+  - `Accept: application/json, text/event-stream`
 
 ### Linux 环境启动报错 [StorageManager] Failed to initialize: xxx
 
 说明：
 - 不影响“手动传入 `user_access_token`”或“不使用 `user_access_token`”的场景。
+- 但如果使用托管 OAuth（例如 `--oauth` + `--public-base-url`），持久化存储初始化失败会导致服务拒绝启动。
 
 原因：`StorageManager` 使用 keytar 对 `user_access_token` 做加密存储。
 
@@ -63,5 +71,16 @@
   - Debian/Ubuntu: `sudo apt-get install libsecret-1-dev`
   - Red Hat-based: `sudo yum install libsecret-devel`
   - Arch Linux: `sudo pacman -S libsecret`
+- 或在服务器环境显式设置 `LARK_AUTH_ENCRYPTION_KEY`，确保服务可持久化保存 OAuth client、MCP session 和飞书凭证。
 
+### 为什么每次登录都会看到飞书授权页？
+
+说明：
+- 浏览器里的授权页来自飞书，因为 MCP 服务本质上是在代理飞书 OAuth。
+- 正常情况下，只有首次登录、refresh token 失效、权限范围变化或服务端持久化状态丢失时，才需要重新看到飞书授权页。
+
+排查建议：
+- 优先使用 `lark-mcp login` 的默认模式，它会先尝试复用或静默刷新已有登录态。
+- 使用 `lark-mcp login --force` 时，会强制重新打开浏览器完成授权。
+- 在托管 OAuth 场景下，可访问 `/oauth/status` 检查服务端是否成功加载了已保存的 clients、sessions 和 credentials。
 

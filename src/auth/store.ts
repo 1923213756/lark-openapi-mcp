@@ -48,7 +48,15 @@ export class AuthStore implements OAuthRegisteredClientsStore {
   private async performInitialization(): Promise<void> {
     try {
       await this.loadFromStorage();
-      this.isInitializedStorageSuccess = true;
+      this.isInitializedStorageSuccess = storageManager.isReady();
+
+      if (!this.isInitializedStorageSuccess) {
+        logger.warn(
+          `[AuthStore] Persistent storage is unavailable: ${storageManager.getInitializationError()?.message || 'unknown error'}`,
+        );
+        return;
+      }
+
       logger.info(
         `[AuthStore] Initialized storage successfully with ${Object.keys(this.storageDataCache.tokens).length} Lark tokens and ${Object.keys(this.storageDataCache.mcpSessions || {}).length} MCP sessions`,
       );
@@ -337,6 +345,28 @@ export class AuthStore implements OAuthRegisteredClientsStore {
     await this.saveToStorage();
   }
 
+  async removeMcpSessionsByClient(clientId: string, exceptToken?: string): Promise<number> {
+    await this.initialize();
+
+    let removedCount = 0;
+    for (const [accessToken, session] of Object.entries(this.storageDataCache.mcpSessions || {})) {
+      if (accessToken === exceptToken) {
+        continue;
+      }
+      if (session.clientId !== clientId) {
+        continue;
+      }
+      delete this.storageDataCache.mcpSessions?.[accessToken];
+      removedCount += 1;
+    }
+
+    if (removedCount > 0) {
+      await this.saveToStorage();
+    }
+
+    return removedCount;
+  }
+
   storeCodeVerifier(key: string, codeVerifier: string): void {
     this.codeVerifiers.set(key, codeVerifier);
   }
@@ -363,6 +393,39 @@ export class AuthStore implements OAuthRegisteredClientsStore {
 
   getMcpRefreshTTL(): number {
     return AUTH_CONFIG.MCP_REFRESH_TTL_SECONDS;
+  }
+
+  async ensurePersistentStorage(reason = 'Hosted OAuth requires persistent storage'): Promise<void> {
+    await this.initialize();
+    if (this.isInitializedStorageSuccess) {
+      return;
+    }
+
+    const error = new Error(
+      `${reason}${storageManager.getInitializationError() ? `: ${storageManager.getInitializationError()!.message}` : ''}`,
+    ) as Error & { code?: string };
+    error.code = 'persistent_storage_unavailable';
+    throw error;
+  }
+
+  async getStorageStatus() {
+    await this.initialize();
+    const storageStatus = storageManager.getStatus();
+
+    return {
+      storageReady: this.isInitializedStorageSuccess,
+      persistentStorage: storageStatus.persistentStorage,
+      storageFile: storageStatus.storageFile,
+      initializationError: storageStatus.initializationError,
+      counts: {
+        tokens: Object.keys(this.storageDataCache.tokens || {}).length,
+        clients: Object.keys(this.storageDataCache.clients || {}).length,
+        localTokens: Object.keys(this.storageDataCache.localTokens || {}).length,
+        transactions: Object.keys(this.storageDataCache.transactions || {}).length,
+        larkCredentials: Object.keys(this.storageDataCache.larkCredentials || {}).length,
+        mcpSessions: Object.keys(this.storageDataCache.mcpSessions || {}).length,
+      },
+    };
   }
 
   destroy(): void {

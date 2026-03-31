@@ -1,8 +1,14 @@
 import express from 'express';
 import { LarkAuthHandlerLocal } from '../auth/handler/handler-local';
 import { authStore } from '../auth/store';
-import { isTokenExpired } from '../auth/utils';
+import { isTokenExpired, isTokenValid } from '../auth/utils';
 import open from 'open';
+
+class ExitSignal extends Error {
+  constructor(readonly exitCode: number) {
+    super(`Process exit ${exitCode}`);
+  }
+}
 
 export interface LoginOptions {
   appId: string;
@@ -12,9 +18,15 @@ export interface LoginOptions {
   port: string;
   scope?: string[];
   timeout?: number;
+  force?: boolean;
 }
 
 export class LoginHandler {
+  private static exit(code: number): never {
+    process.exit(code);
+    throw new ExitSignal(code);
+  }
+
   static async checkTokenWithTimeout(timeout: number, appId: string): Promise<boolean> {
     let time = 0;
     return new Promise((resolve) => {
@@ -34,16 +46,14 @@ export class LoginHandler {
   }
 
   static async handleLogin(options: LoginOptions): Promise<void> {
-    const { appId, appSecret, domain, host, port, scope, timeout = 60000 } = options;
+    const { appId, appSecret, domain, host, port, scope, timeout = 60000, force = false } = options;
 
     if (!appId || !appSecret) {
       console.error('Error: Missing App Credentials (appId and appSecret are required for login)');
-      process.exit(1);
+      this.exit(1);
     }
 
     try {
-      console.log('🔐 Starting OAuth login process...');
-
       const app = express();
       app.use(express.json());
 
@@ -57,7 +67,32 @@ export class LoginHandler {
       });
       authHandler.setupRoutes();
 
-      const result = await authHandler.reAuthorize(undefined, true);
+      const localAccessToken = await authStore.getLocalAccessToken(appId);
+      if (!force && localAccessToken) {
+        const { valid, isExpired, token } = await isTokenValid(localAccessToken);
+
+        if (valid) {
+          console.log('✅ Already logged in');
+          this.exit(0);
+        }
+
+        if (isExpired && token?.extra?.refreshToken) {
+          console.log('🔄 Local token expired, attempting silent refresh...');
+          try {
+            await authHandler.refreshToken(localAccessToken);
+            console.log('✅ Successfully refreshed existing login');
+            this.exit(0);
+          } catch (error) {
+            if (error instanceof ExitSignal) {
+              throw error;
+            }
+            console.log('⚠️ Silent refresh failed, starting browser login...');
+          }
+        }
+      }
+
+      console.log(force ? '🔐 Starting forced OAuth login process...' : '🔐 Starting OAuth login process...');
+      const result = await authHandler.reAuthorize(undefined, force);
 
       if (result.authorizeUrl) {
         console.log('📱 Please open the following URL in your browser to complete the login:');
@@ -75,17 +110,24 @@ export class LoginHandler {
 
         if (success) {
           console.log('✅ Successfully logged in');
-          process.exit(0);
+          this.exit(0);
         } else {
           console.log('❌ Login failed');
-          process.exit(1);
+          this.exit(1);
         }
       } else {
-        process.exit(1);
+        if (result.accessToken) {
+          console.log('✅ Already logged in');
+          this.exit(0);
+        }
+        this.exit(1);
       }
     } catch (error) {
+      if (error instanceof ExitSignal) {
+        throw error;
+      }
       console.error('❌ Login failed:', error);
-      process.exit(1);
+      this.exit(1);
     }
   }
 
@@ -96,21 +138,21 @@ export class LoginHandler {
       if (!appId) {
         await authStore.removeAllLocalAccessTokens();
         console.log('✅ Successfully logged out from all apps');
-        process.exit(0);
+        this.exit(0);
       }
 
       const currentToken = await authStore.getLocalAccessToken(appId);
       if (!currentToken) {
         console.log(`ℹ️ No active login session found for app: ${appId}`);
-        process.exit(0);
+        this.exit(0);
       }
 
       await authStore.removeLocalAccessToken(appId);
       console.log(`✅ Successfully logged out from app: ${appId}`);
-      process.exit(0);
+      this.exit(0);
     } catch (error) {
       console.error('❌ Logout failed:', error);
-      process.exit(1);
+      this.exit(1);
     }
   }
 
@@ -127,11 +169,28 @@ export class LoginHandler {
   }
 
   static async handleWhoAmI(): Promise<void> {
+    const storageStatus = await authStore.getStorageStatus();
     const tokens = await authStore.getAllLocalAccessTokens();
+
+    console.log('🩺 Auth Store:');
+    console.log(
+      JSON.stringify(
+        {
+          storageReady: storageStatus.storageReady,
+          persistentStorage: storageStatus.persistentStorage,
+          storageFile: storageStatus.storageFile,
+          initializationError: storageStatus.initializationError,
+          counts: storageStatus.counts,
+        },
+        null,
+        2,
+      ),
+    );
+    console.log('');
 
     if (Object.keys(tokens).length <= 0) {
       console.log('ℹ️ No active login sessions found');
-      process.exit(0);
+      this.exit(0);
     }
 
     console.log('👤 Current login sessions:\n');
@@ -164,6 +223,6 @@ export class LoginHandler {
       );
       console.log('\n');
     }
-    process.exit(0);
+    this.exit(0);
   }
 }

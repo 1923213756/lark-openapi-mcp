@@ -1,4 +1,4 @@
-import express from 'express';
+import express, { NextFunction, Request, Response } from 'express';
 import { OAuthMetadata, OAuthProtectedResourceMetadata } from '@modelcontextprotocol/sdk/shared/auth.js';
 import { OAuthServerProvider } from '@modelcontextprotocol/sdk/server/auth/provider.js';
 import { authorizationHandler } from '@modelcontextprotocol/sdk/server/auth/handlers/authorize.js';
@@ -55,6 +55,30 @@ export function larkAuthRouter(options: LarkAuthRouterOptions) {
     resource_name: options.resourceName,
   };
 
+  router.use(joinPath(basePath, '/authorize'), (req: Request, res: Response, next: NextFunction) => {
+    const codeChallenge = req.query.code_challenge;
+    const codeChallengeMethod = req.query.code_challenge_method;
+
+    if (typeof codeChallenge !== 'string' || typeof codeChallengeMethod !== 'string') {
+      res.status(400).json({
+        error: 'invalid_request',
+        error_description: 'PKCE is required. Provide code_challenge and code_challenge_method=S256.',
+        lark_mcp_error: 'pkce_required',
+      });
+      return;
+    }
+
+    if (codeChallengeMethod !== 'S256') {
+      res.status(400).json({
+        error: 'invalid_request',
+        error_description: 'Unsupported code_challenge_method. Only S256 is supported.',
+        lark_mcp_error: 'pkce_required',
+      });
+      return;
+    }
+
+    next();
+  });
   router.use(joinPath(basePath, '/authorize'), authorizationHandler({ provider: options.provider }));
   router.use(joinPath(basePath, '/token'), tokenHandler({ provider: options.provider }));
 

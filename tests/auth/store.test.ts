@@ -19,6 +19,9 @@ jest.mock('../../src/auth/utils/storage-manager', () => ({
     saveStorageData: jest.fn(),
     encrypt: jest.fn(),
     decrypt: jest.fn(),
+    isReady: jest.fn(),
+    getInitializationError: jest.fn(),
+    getStatus: jest.fn(),
     storageFile: '/mock/storage/path/storage.json',
   },
 }));
@@ -46,6 +49,14 @@ describe('AuthStore', () => {
     mockStorageManager.saveStorageData.mockResolvedValue();
     mockStorageManager.encrypt.mockImplementation((data) => `encrypted:${data}`);
     mockStorageManager.decrypt.mockImplementation((data) => data.replace('encrypted:', ''));
+    mockStorageManager.isReady.mockReturnValue(true);
+    mockStorageManager.getInitializationError.mockReturnValue(undefined);
+    mockStorageManager.getStatus.mockReturnValue({
+      ready: true,
+      persistentStorage: true,
+      storageFile: '/mock/storage/path/storage.json',
+      initializationError: undefined,
+    });
 
     // Mock fs methods to prevent file system errors
     mockFs.existsSync.mockReturnValue(false);
@@ -434,6 +445,19 @@ describe('AuthStore', () => {
       // Should not throw, but also should not save to storage
       await newAuthStore.storeToken(testToken);
       expect(mockStorageManager.saveStorageData).not.toHaveBeenCalled();
+    });
+
+    it('should throw when hosted oauth requires persistent storage and storage is unavailable', async () => {
+      mockStorageManager.isReady.mockReturnValue(false);
+      mockStorageManager.getInitializationError.mockReturnValue(new Error('Keytar unavailable'));
+
+      const newAuthStore = new AuthStore();
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      await expect(newAuthStore.ensurePersistentStorage()).rejects.toMatchObject({
+        message: expect.stringContaining('Hosted OAuth requires persistent storage'),
+        code: 'persistent_storage_unavailable',
+      });
     });
 
     it('should handle missing data in clearExpiredTokens', async () => {

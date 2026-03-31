@@ -10,6 +10,7 @@ import { authStore } from '../store';
 import { LarkProxyOAuthServerProviderOptions } from './types';
 import { commonHttpInstance } from '../../utils/http-instance';
 import { logger } from '../../utils/logger';
+import { AUTH_CONFIG } from '../config';
 import {
   fetchLarkUserInfo,
   getScopes,
@@ -270,7 +271,13 @@ export class LarkOIDC2OAuthServerProvider implements OAuthServerProvider {
       throw new InvalidGrantError('lark credential not found');
     }
 
-    if (credential.expiresAt && credential.expiresAt < Date.now() / 1000) {
+    const now = Date.now() / 1000;
+    const safetyWindow = AUTH_CONFIG.OAUTH_EXPIRY_SAFETY_WINDOW_SECONDS;
+    const shouldRefreshCredential =
+      (credential.expiresAt && credential.expiresAt <= now + safetyWindow) ||
+      (credential.refreshExpiresAt && credential.refreshExpiresAt <= now + safetyWindow);
+
+    if (shouldRefreshCredential) {
       if (!credential.refreshToken) {
         throw new InvalidGrantError('lark refresh token not found');
       }

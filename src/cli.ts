@@ -35,6 +35,7 @@ program
     '--scope <scope>',
     '(Optional) Specify OAuth scope for user access token, default is all permissions granted to the app, separated by spaces or commas',
   )
+  .option('--force', '(Optional) Force a full browser login even if a stored token can be reused or refreshed')
   .option('--debug', '(Optional) Enable debug mode')
   .action(async (options) => {
     if (NODE_VERSION_MAJOR < 20) {

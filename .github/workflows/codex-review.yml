@@ -20,8 +20,7 @@ jobs:
   review:
     if: >-
       github.event.pull_request.draft == false &&
-      github.event.pull_request.head.repo.full_name == github.repository &&
-      secrets.OPENAI_API_KEY != ''
+      github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
@@ -34,6 +33,11 @@ jobs:
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
+            if (!process.env.OPENAI_API_KEY) {
+              core.info('OPENAI_API_KEY is not configured; skipping Codex review.');
+              return;
+            }
+
             const owner = context.repo.owner;
             const repo = context.repo.repo;
             const pull_number = context.payload.pull_request.number;

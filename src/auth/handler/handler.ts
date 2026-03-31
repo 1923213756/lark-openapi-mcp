@@ -291,7 +291,7 @@ export class LarkAuthHandler {
     const token =
       (await authStore.getToken(accessToken)) ||
       (await authStore.getMcpSession(accessToken)) ||
-      (await authStore.getToken(await this.resolveUserAccessToken(accessToken) || ''));
+      (await authStore.getToken((await this.resolveUserAccessToken(accessToken)) || ''));
 
     if (!token) {
       logger.error('[LarkAuthHandler] reAuthorize: Invalid access token, please reconnect the mcp server');

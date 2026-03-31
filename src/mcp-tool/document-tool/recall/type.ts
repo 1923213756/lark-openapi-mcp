@@ -1,5 +1,5 @@
-import type { CallToolResult } from "@modelcontextprotocol/sdk/types";
-import type { z } from "zod";
+import type { CallToolResult } from '@modelcontextprotocol/sdk/types';
+import type { z } from 'zod';
 
 export interface DocumentRecallToolOptions {
   domain?: string;

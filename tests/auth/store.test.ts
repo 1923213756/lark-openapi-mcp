@@ -382,7 +382,9 @@ describe('AuthStore', () => {
       const newAuthStore = new AuthStore();
       await new Promise((resolve) => setTimeout(resolve, 100));
 
-      expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining('[AuthStore] Failed to initialize: Error: Load failed'));
+      expect(consoleSpy).toHaveBeenCalledWith(
+        expect.stringContaining('[AuthStore] Failed to initialize: Error: Load failed'),
+      );
       consoleSpy.mockRestore();
     });
 

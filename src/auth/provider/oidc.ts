@@ -168,10 +168,7 @@ export class LarkOIDC2OAuthServerProvider implements OAuthServerProvider {
     res.redirect(targetUrl.toString());
   }
 
-  async challengeForAuthorizationCode(
-    client: OAuthClientInformationFull,
-    authorizationCode: string,
-  ): Promise<string> {
+  async challengeForAuthorizationCode(client: OAuthClientInformationFull, authorizationCode: string): Promise<string> {
     const transaction = await authStore.getTransaction(authorizationCode);
     if (!transaction || transaction.clientId !== client.client_id) {
       throw new InvalidGrantError('authorization code is invalid');

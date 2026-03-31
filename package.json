@@ -24,6 +24,7 @@
     "dev": "ts-node src/index.ts",
     "dev:cli": "ts-node src/cli.ts",
     "format": "prettier --write \"src/**/*.ts\"",
+    "lint": "prettier --check \"src/**/*.ts\" \"tests/**/*.ts\"",
     "prepare": "yarn build",
     "test": "jest",
     "test:watch": "jest --watch",

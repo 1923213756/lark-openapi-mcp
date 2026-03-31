@@ -76,7 +76,18 @@ const createMockResponse = () => ({
   writeHead: jest.fn().mockReturnThis(),
   end: jest.fn(),
   status: jest.fn().mockReturnThis(),
+  json: jest.fn(),
   send: jest.fn(),
+});
+
+const createMockPostRequest = (overrides: Record<string, unknown> = {}) => ({
+  headers: {
+    accept: 'application/json, text/event-stream',
+    'content-type': 'application/json',
+  },
+  query: { appId: 'mock-app-id', appSecret: 'mock-app-secret' },
+  body: { jsonrpc: '2.0', method: 'test' },
+  ...overrides,
 });
 
 // 保存原始console和process.exit
@@ -172,11 +183,9 @@ describe('initStreamableServer', () => {
     initStreamableServer(getMockServer, options);
 
     // 模拟请求和响应
-    const mockReq = {
+    const mockReq = createMockPostRequest({
       auth: { token: 'test-token' },
-      query: { appId: 'mock-app-id', appSecret: 'mock-app-secret' },
-      body: { jsonrpc: '2.0', method: 'test' },
-    };
+    });
     const mockRes = createMockResponse();
 
     // 调用POST路由处理器
@@ -212,10 +221,7 @@ describe('initStreamableServer', () => {
     initStreamableServer(getMockServer, options);
 
     // 模拟请求和响应（无auth token）
-    const mockReq = {
-      query: { appId: 'mock-app-id', appSecret: 'mock-app-secret' },
-      body: { jsonrpc: '2.0', method: 'test' },
-    };
+    const mockReq = createMockPostRequest();
     const mockRes = createMockResponse();
 
     // 调用POST路由处理器
@@ -248,11 +254,7 @@ describe('initStreamableServer', () => {
     initStreamableServer(getMockServer, options);
 
     // 模拟没有auth属性的请求
-    const mockReq = {
-      // 没有auth属性
-      query: { appId: 'mock-app-id', appSecret: 'mock-app-secret' },
-      body: { jsonrpc: '2.0', method: 'test' },
-    };
+    const mockReq = createMockPostRequest();
     const mockRes = createMockResponse();
 
     // 调用POST路由处理器
@@ -285,11 +287,9 @@ describe('initStreamableServer', () => {
     initStreamableServer(getMockServer, options);
 
     // 模拟有auth对象但没有token的请求
-    const mockReq = {
+    const mockReq = createMockPostRequest({
       auth: {}, // 有auth对象但没有token属性
-      query: { appId: 'mock-app-id', appSecret: 'mock-app-secret' },
-      body: { jsonrpc: '2.0', method: 'test' },
-    };
+    });
     const mockRes = createMockResponse();
 
     // 调用POST路由处理器
@@ -325,10 +325,7 @@ describe('initStreamableServer', () => {
     initStreamableServer(getMockServer, options);
 
     // 模拟请求和响应
-    const mockReq = {
-      query: { appId: 'mock-app-id', appSecret: 'mock-app-secret' },
-      body: { jsonrpc: '2.0', method: 'test' },
-    };
+    const mockReq = createMockPostRequest();
     const mockRes = createMockResponse();
 
     // 调用POST路由处理器
@@ -365,11 +362,19 @@ describe('initStreamableServer', () => {
 
     // 验证方法不允许的响应
     expect(console.log).toHaveBeenCalledWith('Received GET MCP request');
-    expect(mockRes.writeHead).toHaveBeenCalledWith(405);
-    expect(mockRes.end).toHaveBeenCalledWith(
-      JSON.stringify({
+    expect(mockRes.status).toHaveBeenCalledWith(405);
+    expect(mockRes.json).toHaveBeenCalledWith(
+      expect.objectContaining({
         jsonrpc: '2.0',
-        error: { code: -32000, message: 'Method not allowed.' },
+        error: expect.objectContaining({
+          code: -32000,
+          message: 'Method not allowed. Use POST /mcp.',
+          data: expect.objectContaining({
+            lark_mcp_error: 'method_not_allowed',
+            allowed_method: 'POST',
+            endpoint: '/mcp',
+          }),
+        }),
         id: null,
       }),
     );
@@ -391,7 +396,8 @@ describe('initStreamableServer', () => {
     // 模拟响应对象抛出错误
     const mockReq = {};
     const mockRes = {
-      writeHead: jest.fn().mockImplementation(() => {
+      status: jest.fn().mockReturnThis(),
+      json: jest.fn().mockImplementation(() => {
         throw new Error('Response error');
       }),
       end: jest.fn(),
@@ -426,11 +432,19 @@ describe('initStreamableServer', () => {
 
     // 验证方法不允许的响应
     expect(console.log).toHaveBeenCalledWith('Received DELETE MCP request');
-    expect(mockRes.writeHead).toHaveBeenCalledWith(405);
-    expect(mockRes.end).toHaveBeenCalledWith(
-      JSON.stringify({
+    expect(mockRes.status).toHaveBeenCalledWith(405);
+    expect(mockRes.json).toHaveBeenCalledWith(
+      expect.objectContaining({
         jsonrpc: '2.0',
-        error: { code: -32000, message: 'Method not allowed.' },
+        error: expect.objectContaining({
+          code: -32000,
+          message: 'Method not allowed. Use POST /mcp.',
+          data: expect.objectContaining({
+            lark_mcp_error: 'method_not_allowed',
+            allowed_method: 'POST',
+            endpoint: '/mcp',
+          }),
+        }),
         id: null,
       }),
     );
@@ -452,7 +466,8 @@ describe('initStreamableServer', () => {
     // 模拟响应对象抛出错误
     const mockReq = {};
     const mockRes = {
-      writeHead: jest.fn().mockImplementation(() => {
+      status: jest.fn().mockReturnThis(),
+      json: jest.fn().mockImplementation(() => {
         throw new Error('Response error');
       }),
       end: jest.fn(),
@@ -465,7 +480,7 @@ describe('initStreamableServer', () => {
     expect(sendJsonRpcError).toHaveBeenCalledWith(mockRes, expect.any(Error));
   });
 
-  it('应该在启用OAuth时创建认证处理器', () => {
+  it('应该在启用OAuth时创建认证处理器', async () => {
     const options: McpServerOptions = {
       appId: 'test-app-id',
       appSecret: 'test-app-secret',
@@ -477,13 +492,13 @@ describe('initStreamableServer', () => {
     const { McpServer } = require('@modelcontextprotocol/sdk/server/mcp.js');
     const getMockServer = jest.fn().mockReturnValue(new McpServer());
 
-    initStreamableServer(getMockServer, options, { needAuthFlow: true });
+    await initStreamableServer(getMockServer, options, { needAuthFlow: true });
 
     // 验证LarkAuthHandler被创建
     expect(LarkAuthHandler).toHaveBeenCalledWith(mockApp, options);
   });
 
-  it('应该处理服务器启动错误', () => {
+  it('应该处理服务器启动错误', async () => {
     const options: McpServerOptions = {
       appId: 'test-app-id',
       appSecret: 'test-app-secret',
@@ -500,7 +515,7 @@ describe('initStreamableServer', () => {
       return { close: jest.fn() };
     });
 
-    initStreamableServer(getMockServer, options);
+    await initStreamableServer(getMockServer, options);
 
     // 验证错误被记录并且进程退出
     expect(console.error).toHaveBeenCalledWith(
@@ -509,7 +524,7 @@ describe('initStreamableServer', () => {
     expect(process.exit).toHaveBeenCalledWith(1);
   });
 
-  it('应该在缺少必需参数时抛出错误', () => {
+  it('应该在缺少必需参数时抛出错误', async () => {
     const invalidOptions: McpServerOptions = {
       appId: 'test-app-id',
       appSecret: 'test-app-secret',
@@ -519,12 +534,12 @@ describe('initStreamableServer', () => {
     const { McpServer } = require('@modelcontextprotocol/sdk/server/mcp.js');
     const getMockServer = jest.fn().mockReturnValue(new McpServer());
 
-    expect(() => {
-      initStreamableServer(getMockServer, invalidOptions);
-    }).toThrow('[Lark MCP] Port and host are required');
+    await expect(initStreamableServer(getMockServer, invalidOptions)).rejects.toThrow(
+      '[Lark MCP] Port and host are required',
+    );
   });
 
-  it('应该正确传递配置参数', () => {
+  it('应该正确传递配置参数', async () => {
     const options: McpServerOptions = {
       appId: 'custom-app-id',
       appSecret: 'custom-app-secret',
@@ -538,7 +553,7 @@ describe('initStreamableServer', () => {
       close: jest.fn(),
     });
 
-    initStreamableServer(getNewServerMock, options);
+    await initStreamableServer(getNewServerMock, options);
 
     // 验证Express路由被正确设置
     expect(mockApp.post).toHaveBeenCalledWith('/mcp', expect.any(Function), expect.any(Function));
@@ -547,7 +562,7 @@ describe('initStreamableServer', () => {
     expect(mockApp.listen).toHaveBeenCalledWith(3000, 'localhost', expect.any(Function));
   });
 
-  it('应该在成功启动时记录日志', () => {
+  it('应该在成功启动时记录日志', async () => {
     const options: McpServerOptions = {
       appId: 'test-app-id',
       appSecret: 'test-app-secret',
@@ -564,7 +579,7 @@ describe('initStreamableServer', () => {
     const { McpServer } = require('@modelcontextprotocol/sdk/server/mcp.js');
     const getMockServer = jest.fn().mockReturnValue(new McpServer());
 
-    initStreamableServer(getMockServer, options);
+    await initStreamableServer(getMockServer, options);
 
     // 验证成功日志
     expect(console.log).toHaveBeenCalledWith('📡 Streamable endpoint: http://localhost:3000/mcp');
@@ -666,7 +681,7 @@ describe('initStreamableServer', () => {
       expect(mockNext).toHaveBeenCalled();
     });
 
-    it('应该在有OAuth时调用authHandler.authenticateRequest', () => {
+    it('应该在有OAuth时调用authHandler.authenticateRequest', async () => {
       const options: McpServerOptions = {
         appId: 'test-app-id',
         appSecret: 'test-app-secret',
@@ -678,7 +693,7 @@ describe('initStreamableServer', () => {
       const { McpServer } = require('@modelcontextprotocol/sdk/server/mcp.js');
       const getMockServer = jest.fn().mockReturnValue(new McpServer());
 
-      initStreamableServer(getMockServer, options, { needAuthFlow: true });
+      await initStreamableServer(getMockServer, options, { needAuthFlow: true });
 
       const mockReq = {
         headers: {

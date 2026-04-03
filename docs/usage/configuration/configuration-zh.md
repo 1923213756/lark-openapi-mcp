@@ -219,6 +219,12 @@ npx -y @larksuiteoapi/lark-mcp mcp \
 - `GET http://mcp.infra.company:3000/oauth/status`
 - 用于检查 `issuer`、`callback_url`、存储是否就绪、已加载的 clients/sessions/credentials 数量。
 
+推荐的客户端认证策略：
+
+- 工具真正被调用前再检查 OAuth 状态，而不是在枚举工具时提前弹授权页。
+- `mcp_at_*` 快过期时先静默 refresh。
+- 仅当 refresh 返回 `invalid_grant`、`reauth_required`，或服务端返回 `invalid_client` 且自动重注册失败时，再要求用户完成浏览器授权。
+
 ## ⚙️ 高级配置选项
 
 本节介绍更高级的配置方法，包括环境变量、配置文件等。

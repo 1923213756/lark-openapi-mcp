@@ -1,10 +1,11 @@
 import express, { NextFunction, Request, Response } from 'express';
 import { OAuthMetadata, OAuthProtectedResourceMetadata } from '@modelcontextprotocol/sdk/shared/auth.js';
 import { OAuthServerProvider } from '@modelcontextprotocol/sdk/server/auth/provider.js';
-import { authorizationHandler } from '@modelcontextprotocol/sdk/server/auth/handlers/authorize.js';
-import { tokenHandler } from '@modelcontextprotocol/sdk/server/auth/handlers/token.js';
 import { clientRegistrationHandler } from '@modelcontextprotocol/sdk/server/auth/handlers/register.js';
 import { metadataHandler } from '@modelcontextprotocol/sdk/server/auth/handlers/metadata.js';
+import { LarkInvalidRequestError } from './errors';
+import { larkAuthorizationHandler } from './authorize-handler';
+import { larkTokenHandler } from './token-handler';
 
 export interface LarkAuthRouterOptions {
   provider: OAuthServerProvider;
@@ -60,27 +61,33 @@ export function larkAuthRouter(options: LarkAuthRouterOptions) {
     const codeChallengeMethod = req.query.code_challenge_method;
 
     if (typeof codeChallenge !== 'string' || typeof codeChallengeMethod !== 'string') {
-      res.status(400).json({
-        error: 'invalid_request',
-        error_description: 'PKCE is required. Provide code_challenge and code_challenge_method=S256.',
-        lark_mcp_error: 'pkce_required',
-      });
+      res
+        .status(400)
+        .json(
+          new LarkInvalidRequestError(
+            'PKCE is required. Provide code_challenge and code_challenge_method=S256.',
+            'pkce_required',
+          ).toResponseObject(),
+        );
       return;
     }
 
     if (codeChallengeMethod !== 'S256') {
-      res.status(400).json({
-        error: 'invalid_request',
-        error_description: 'Unsupported code_challenge_method. Only S256 is supported.',
-        lark_mcp_error: 'pkce_required',
-      });
+      res
+        .status(400)
+        .json(
+          new LarkInvalidRequestError(
+            'Unsupported code_challenge_method. Only S256 is supported.',
+            'pkce_required',
+          ).toResponseObject(),
+        );
       return;
     }
 
     next();
   });
-  router.use(joinPath(basePath, '/authorize'), authorizationHandler({ provider: options.provider }));
-  router.use(joinPath(basePath, '/token'), tokenHandler({ provider: options.provider }));
+  router.use(joinPath(basePath, '/authorize'), larkAuthorizationHandler({ provider: options.provider }));
+  router.use(joinPath(basePath, '/token'), larkTokenHandler({ provider: options.provider }));
 
   if (oauthMetadata.registration_endpoint) {
     router.use(

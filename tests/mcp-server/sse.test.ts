@@ -265,7 +265,7 @@ describe('initSSEServer', () => {
     expect(mcpCloseMock).toHaveBeenCalled();
   });
 
-  it('应该在启用OAuth时创建认证处理器', () => {
+  it('应该在启用OAuth时创建认证处理器', async () => {
     const options: McpServerOptions = {
       appId: 'test-app-id',
       appSecret: 'test-app-secret',
@@ -277,7 +277,7 @@ describe('initSSEServer', () => {
     const { McpServer } = require('@modelcontextprotocol/sdk/server/mcp.js');
     const mockServer = new McpServer();
 
-    initSSEServer(() => mockServer, options, { needAuthFlow: true });
+    await initSSEServer(() => mockServer, options, { needAuthFlow: true });
 
     // 验证LarkAuthHandler被创建
     expect(LarkAuthHandler).toHaveBeenCalledWith(mockApp, options);
@@ -313,7 +313,7 @@ describe('initSSEServer', () => {
     expect(process.exit).toHaveBeenCalledWith(1);
   });
 
-  it('应该在缺少必需参数时抛出错误', () => {
+  it('应该在缺少必需参数时抛出错误', async () => {
     const invalidOptions: McpServerOptions = {
       appId: 'test-app-id',
       appSecret: 'test-app-secret',
@@ -323,9 +323,9 @@ describe('initSSEServer', () => {
     const { McpServer } = require('@modelcontextprotocol/sdk/server/mcp.js');
     const mockServer = new McpServer();
 
-    expect(() => {
-      initSSEServer(() => mockServer, invalidOptions);
-    }).toThrow('[Lark MCP] Port and host are required');
+    await expect(initSSEServer(() => mockServer, invalidOptions)).rejects.toThrow(
+      '[Lark MCP] Port and host are required',
+    );
   });
 
   it('应该正确传递配置参数', () => {
@@ -564,7 +564,7 @@ describe('initSSEServer', () => {
       };
       (LarkAuthHandler as jest.Mock).mockImplementation(() => mockAuthHandler);
 
-      initSSEServer(() => mockServer, options, { needAuthFlow: true });
+      await initSSEServer(() => mockServer, options, { needAuthFlow: true });
 
       // 首先设置一个transport
       const mockRes1 = createMockResponse();

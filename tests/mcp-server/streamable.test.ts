@@ -76,6 +76,7 @@ const createMockResponse = () => ({
   writeHead: jest.fn().mockReturnThis(),
   end: jest.fn(),
   status: jest.fn().mockReturnThis(),
+  json: jest.fn().mockReturnThis(),
   send: jest.fn(),
 });
 
@@ -174,6 +175,10 @@ describe('initStreamableServer', () => {
     // 模拟请求和响应
     const mockReq = {
       auth: { token: 'test-token' },
+      headers: {
+        accept: 'application/json, text/event-stream',
+        'content-type': 'application/json',
+      },
       query: { appId: 'mock-app-id', appSecret: 'mock-app-secret' },
       body: { jsonrpc: '2.0', method: 'test' },
     };
@@ -213,6 +218,10 @@ describe('initStreamableServer', () => {
 
     // 模拟请求和响应（无auth token）
     const mockReq = {
+      headers: {
+        accept: 'application/json, text/event-stream',
+        'content-type': 'application/json',
+      },
       query: { appId: 'mock-app-id', appSecret: 'mock-app-secret' },
       body: { jsonrpc: '2.0', method: 'test' },
     };
@@ -250,6 +259,10 @@ describe('initStreamableServer', () => {
     // 模拟没有auth属性的请求
     const mockReq = {
       // 没有auth属性
+      headers: {
+        accept: 'application/json, text/event-stream',
+        'content-type': 'application/json',
+      },
       query: { appId: 'mock-app-id', appSecret: 'mock-app-secret' },
       body: { jsonrpc: '2.0', method: 'test' },
     };
@@ -287,6 +300,10 @@ describe('initStreamableServer', () => {
     // 模拟有auth对象但没有token的请求
     const mockReq = {
       auth: {}, // 有auth对象但没有token属性
+      headers: {
+        accept: 'application/json, text/event-stream',
+        'content-type': 'application/json',
+      },
       query: { appId: 'mock-app-id', appSecret: 'mock-app-secret' },
       body: { jsonrpc: '2.0', method: 'test' },
     };
@@ -326,6 +343,10 @@ describe('initStreamableServer', () => {
 
     // 模拟请求和响应
     const mockReq = {
+      headers: {
+        accept: 'application/json, text/event-stream',
+        'content-type': 'application/json',
+      },
       query: { appId: 'mock-app-id', appSecret: 'mock-app-secret' },
       body: { jsonrpc: '2.0', method: 'test' },
     };
@@ -365,14 +386,20 @@ describe('initStreamableServer', () => {
 
     // 验证方法不允许的响应
     expect(console.log).toHaveBeenCalledWith('Received GET MCP request');
-    expect(mockRes.writeHead).toHaveBeenCalledWith(405);
-    expect(mockRes.end).toHaveBeenCalledWith(
-      JSON.stringify({
-        jsonrpc: '2.0',
-        error: { code: -32000, message: 'Method not allowed.' },
-        id: null,
-      }),
-    );
+    expect(mockRes.status).toHaveBeenCalledWith(405);
+    expect(mockRes.json).toHaveBeenCalledWith({
+      jsonrpc: '2.0',
+      error: {
+        code: -32000,
+        message: 'Method not allowed. Use POST /mcp.',
+        data: {
+          lark_mcp_error: 'method_not_allowed',
+          allowed_method: 'POST',
+          endpoint: '/mcp',
+        },
+      },
+      id: null,
+    });
   });
 
   it('应该处理GET /mcp请求时的错误', async () => {
@@ -391,10 +418,10 @@ describe('initStreamableServer', () => {
     // 模拟响应对象抛出错误
     const mockReq = {};
     const mockRes = {
-      writeHead: jest.fn().mockImplementation(() => {
+      status: jest.fn().mockImplementation(() => {
         throw new Error('Response error');
       }),
-      end: jest.fn(),
+      json: jest.fn(),
     };
 
     // 调用GET路由处理器
@@ -426,14 +453,20 @@ describe('initStreamableServer', () => {
 
     // 验证方法不允许的响应
     expect(console.log).toHaveBeenCalledWith('Received DELETE MCP request');
-    expect(mockRes.writeHead).toHaveBeenCalledWith(405);
-    expect(mockRes.end).toHaveBeenCalledWith(
-      JSON.stringify({
-        jsonrpc: '2.0',
-        error: { code: -32000, message: 'Method not allowed.' },
-        id: null,
-      }),
-    );
+    expect(mockRes.status).toHaveBeenCalledWith(405);
+    expect(mockRes.json).toHaveBeenCalledWith({
+      jsonrpc: '2.0',
+      error: {
+        code: -32000,
+        message: 'Method not allowed. Use POST /mcp.',
+        data: {
+          lark_mcp_error: 'method_not_allowed',
+          allowed_method: 'POST',
+          endpoint: '/mcp',
+        },
+      },
+      id: null,
+    });
   });
 
   it('应该处理DELETE /mcp请求时的错误', async () => {
@@ -452,10 +485,10 @@ describe('initStreamableServer', () => {
     // 模拟响应对象抛出错误
     const mockReq = {};
     const mockRes = {
-      writeHead: jest.fn().mockImplementation(() => {
+      status: jest.fn().mockImplementation(() => {
         throw new Error('Response error');
       }),
-      end: jest.fn(),
+      json: jest.fn(),
     };
 
     // 调用DELETE路由处理器
@@ -509,7 +542,7 @@ describe('initStreamableServer', () => {
     expect(process.exit).toHaveBeenCalledWith(1);
   });
 
-  it('应该在缺少必需参数时抛出错误', () => {
+  it('应该在缺少必需参数时抛出错误', async () => {
     const invalidOptions: McpServerOptions = {
       appId: 'test-app-id',
       appSecret: 'test-app-secret',
@@ -519,9 +552,9 @@ describe('initStreamableServer', () => {
     const { McpServer } = require('@modelcontextprotocol/sdk/server/mcp.js');
     const getMockServer = jest.fn().mockReturnValue(new McpServer());
 
-    expect(() => {
-      initStreamableServer(getMockServer, invalidOptions);
-    }).toThrow('[Lark MCP] Port and host are required');
+    await expect(initStreamableServer(getMockServer, invalidOptions)).rejects.toThrow(
+      '[Lark MCP] Port and host are required',
+    );
   });
 
   it('应该正确传递配置参数', () => {
@@ -666,7 +699,7 @@ describe('initStreamableServer', () => {
       expect(mockNext).toHaveBeenCalled();
     });
 
-    it('应该在有OAuth时调用authHandler.authenticateRequest', () => {
+    it('应该在有OAuth时调用authHandler.authenticateRequest', async () => {
       const options: McpServerOptions = {
         appId: 'test-app-id',
         appSecret: 'test-app-secret',
@@ -677,8 +710,13 @@ describe('initStreamableServer', () => {
 
       const { McpServer } = require('@modelcontextprotocol/sdk/server/mcp.js');
       const getMockServer = jest.fn().mockReturnValue(new McpServer());
+      const authHandlerInstance = {
+        setupRoutes: jest.fn(),
+        authenticateRequest: jest.fn((req, res, next) => next()),
+      };
+      (LarkAuthHandler as jest.Mock).mockImplementationOnce(() => authHandlerInstance);
 
-      initStreamableServer(getMockServer, options, { needAuthFlow: true });
+      await initStreamableServer(getMockServer, options, { needAuthFlow: true });
 
       const mockReq = {
         headers: {
@@ -693,7 +731,6 @@ describe('initStreamableServer', () => {
 
       // 验证LarkAuthHandler的authenticateRequest被调用
       expect(LarkAuthHandler).toHaveBeenCalledWith(mockApp, options);
-      const authHandlerInstance = (LarkAuthHandler as jest.Mock).mock.results[0].value;
       expect(authHandlerInstance.authenticateRequest).toHaveBeenCalledWith(mockReq, mockRes, mockNext);
     });
   });

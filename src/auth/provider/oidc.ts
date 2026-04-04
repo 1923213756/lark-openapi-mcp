@@ -11,6 +11,7 @@ import { LarkProxyOAuthServerProviderOptions } from './types';
 import { commonHttpInstance } from '../../utils/http-instance';
 import { logger } from '../../utils/logger';
 import { AUTH_CONFIG } from '../config';
+import { getAxiosErrorDetails, LarkInvalidGrantError, LarkReauthRequiredError, LarkServerError } from '../errors';
 import {
   fetchLarkUserInfo,
   getScopes,
@@ -76,28 +77,50 @@ export class LarkOIDC2OAuthServerProvider implements OAuthServerProvider {
   }
 
   private async getAppAccessToken(appId: string, appSecret: string) {
-    const response = await commonHttpInstance.post(
-      this._endpoints.appAccessTokenUrl,
-      { app_id: appId, app_secret: appSecret },
-      { headers: { 'Content-Type': 'application/json; charset=utf-8' } },
-    );
-    return response.data.app_access_token as string;
+    try {
+      const response = await commonHttpInstance.post(
+        this._endpoints.appAccessTokenUrl,
+        { app_id: appId, app_secret: appSecret },
+        { headers: { 'Content-Type': 'application/json; charset=utf-8' } },
+      );
+      return response.data.app_access_token as string;
+    } catch (error: any) {
+      const details = getAxiosErrorDetails(error);
+      logger.error(`[LarkOIDC2OAuthServerProvider] getAppAccessToken failed: ${details.status} ${details.description}`);
+      throw new LarkServerError(
+        `Failed to fetch app access token: ${details.status || 'unknown'} ${details.description}`,
+      );
+    }
   }
 
   private async exchangeLarkAuthorizationCode(authorizationCode: string) {
-    const appAccessToken = await this.getAppAccessToken(this._options.appId, this._options.appSecret);
-    const response = await commonHttpInstance.post(
-      this._endpoints.tokenUrl,
-      { grant_type: 'authorization_code', code: authorizationCode },
-      { headers: { 'Content-Type': 'application/json; charset=utf-8', Authorization: `Bearer ${appAccessToken}` } },
-    );
+    try {
+      const appAccessToken = await this.getAppAccessToken(this._options.appId, this._options.appSecret);
+      const response = await commonHttpInstance.post(
+        this._endpoints.tokenUrl,
+        { grant_type: 'authorization_code', code: authorizationCode },
+        { headers: { 'Content-Type': 'application/json; charset=utf-8', Authorization: `Bearer ${appAccessToken}` } },
+      );
 
-    const data = response.data;
-    const parseResult = LarkOIDCTokenSchema.safeParse(data);
-    if (!parseResult.success) {
-      throw new Error(`Token parse failed: invalid response: ${data?.code}, ${data?.msg}`);
+      const data = response.data;
+      const parseResult = LarkOIDCTokenSchema.safeParse(data);
+      if (!parseResult.success) {
+        throw new LarkServerError(`Token parse failed: invalid response: ${data?.code}, ${data?.msg}`);
+      }
+      return parseResult.data;
+    } catch (error: any) {
+      const details = getAxiosErrorDetails(error);
+      logger.error(
+        `[LarkOIDC2OAuthServerProvider] exchangeLarkAuthorizationCode failed: ${details.status} ${details.description}`,
+      );
+      if (error instanceof LarkServerError) {
+        throw error;
+      }
+      throw new LarkInvalidGrantError(
+        `Token exchange failed: ${details.status || 'unknown'} ${details.description}`,
+        'reauth_required',
+      );
     }
-    return parseResult.data;
   }
 
   private async refreshLarkToken(refreshToken: string) {
@@ -108,20 +131,33 @@ export class LarkOIDC2OAuthServerProvider implements OAuthServerProvider {
 
     const appId = (originalToken.extra?.appId as string) || this._options.appId;
     const appSecret = (originalToken.extra?.appSecret as string) || this._options.appSecret;
-    const appAccessToken = await this.getAppAccessToken(appId, appSecret);
-    const response = await commonHttpInstance.post(
-      this._endpoints.refreshTokenUrl,
-      { grant_type: 'refresh_token', refresh_token: refreshToken },
-      { headers: { 'Content-Type': 'application/json; charset=utf-8', Authorization: `Bearer ${appAccessToken}` } },
-    );
+    let token;
+    try {
+      const appAccessToken = await this.getAppAccessToken(appId, appSecret);
+      const response = await commonHttpInstance.post(
+        this._endpoints.refreshTokenUrl,
+        { grant_type: 'refresh_token', refresh_token: refreshToken },
+        { headers: { 'Content-Type': 'application/json; charset=utf-8', Authorization: `Bearer ${appAccessToken}` } },
+      );
 
-    const data = response.data;
-    const parseResult = LarkOIDCTokenSchema.safeParse(data);
-    if (!parseResult.success) {
-      throw new Error(`Token parse failed: invalid response: ${data?.code}, ${data?.msg}`);
+      const data = response.data;
+      const parseResult = LarkOIDCTokenSchema.safeParse(data);
+      if (!parseResult.success) {
+        throw new LarkServerError(`Token parse failed: invalid response: ${data?.code}, ${data?.msg}`);
+      }
+
+      token = parseResult.data;
+    } catch (error: any) {
+      const details = getAxiosErrorDetails(error);
+      logger.error(`[LarkOIDC2OAuthServerProvider] refreshLarkToken failed: ${details.status} ${details.description}`);
+      if (error instanceof LarkServerError) {
+        throw error;
+      }
+      throw new LarkReauthRequiredError(
+        `Refresh token exchange failed: ${details.status || 'unknown'} ${details.description}`,
+      );
     }
 
-    const token = parseResult.data;
     const credentialId = originalToken.extra?.credentialId as string | undefined;
     const userInfo = await fetchLarkUserInfo(this._options.domain, token.data.access_token);
     await upsertLarkCredential({
@@ -235,9 +271,10 @@ export class LarkOIDC2OAuthServerProvider implements OAuthServerProvider {
       logger.error(
         `[LarkOIDC2OAuthServerProvider] exchangeAuthorizationCode failed: ${error.response?.status || error.status} ${error.response?.data || error.message}`,
       );
-      throw new Error(
-        `Token exchange failed: ${error.response?.status || error.status} ${error.response?.data || error.message}`,
-      );
+      if (error instanceof LarkInvalidGrantError || error instanceof LarkReauthRequiredError) {
+        throw error;
+      }
+      throw new LarkInvalidGrantError(`Token exchange failed: ${error.message || String(error)}`, 'reauth_required');
     }
   }
 

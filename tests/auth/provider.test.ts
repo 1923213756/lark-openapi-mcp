@@ -1,6 +1,7 @@
 import { Response } from 'express';
 import { OAuthClientInformationFull } from '@modelcontextprotocol/sdk/shared/auth.js';
 import { LarkOAuth2OAuthServerProvider } from '../../src/auth/provider';
+import { LarkInvalidGrantError, LarkReauthRequiredError } from '../../src/auth/errors';
 import { authStore } from '../../src/auth/store';
 import { commonHttpInstance } from '../../src/utils/http-instance';
 import * as sharedHelpers from '../../src/auth/provider/shared';
@@ -140,5 +141,63 @@ describe('LarkOAuth2OAuthServerProvider', () => {
       clientId: 'test-client-id',
       scopes: ['scope1'],
     });
+  });
+
+  it('returns a machine-readable reauth_required error when upstream code exchange fails', async () => {
+    const provider = new LarkOAuth2OAuthServerProvider(options);
+    (authStore.getTransaction as jest.Mock).mockResolvedValue({
+      txId: 'tx-1',
+      clientId: 'test-client-id',
+      redirectUri: 'http://example.com/callback',
+      callbackUrl: 'http://localhost:3000/callback?tx_id=tx-1',
+      codeChallenge: 'stored-challenge',
+      scopes: ['scope1'],
+      larkCode: 'lark-auth-code',
+      expiresAt: Math.floor(Date.now() / 1000) + 60,
+    });
+    (commonHttpInstance.post as jest.Mock).mockRejectedValue({
+      response: {
+        status: 401,
+        data: {
+          msg: 'invalid authorization code',
+        },
+      },
+    });
+
+    await expect(provider.exchangeAuthorizationCode(mockClient, 'tx-1')).rejects.toBeInstanceOf(LarkInvalidGrantError);
+
+    try {
+      await provider.exchangeAuthorizationCode(mockClient, 'tx-1');
+    } catch (error) {
+      expect((error as LarkInvalidGrantError).toResponseObject()).toMatchObject({
+        error: 'invalid_grant',
+        lark_mcp_error: 'reauth_required',
+      });
+    }
+  });
+
+  it('returns a machine-readable reauth_required error when upstream refresh fails', async () => {
+    const provider = new LarkOAuth2OAuthServerProvider(options);
+    (authStore.getTokenByRefreshToken as jest.Mock).mockResolvedValue({
+      token: 'stored-token',
+      clientId: 'test-client-id',
+      extra: {
+        appId: 'test-app-id',
+        appSecret: 'test-app-secret',
+        credentialId: 'cred-1',
+      },
+    });
+    (commonHttpInstance.post as jest.Mock).mockRejectedValue({
+      response: {
+        status: 400,
+        data: {
+          msg: 'refresh token revoked',
+        },
+      },
+    });
+
+    await expect(provider.exchangeRefreshToken(mockClient, 'refresh-token')).rejects.toBeInstanceOf(
+      LarkReauthRequiredError,
+    );
   });
 });

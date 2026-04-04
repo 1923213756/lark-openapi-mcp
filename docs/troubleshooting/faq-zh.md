@@ -84,3 +84,6 @@
 - 使用 `lark-mcp login --force` 时，会强制重新打开浏览器完成授权。
 - 在托管 OAuth 场景下，可访问 `/oauth/status` 检查服务端是否成功加载了已保存的 clients、sessions 和 credentials。
 
+补充说明：
+- 若客户端在 refresh 时收到 `invalid_client`，对于动态注册场景应自动重新注册 client，而不是提示用户手动修改 JSON。
+- 若客户端在 refresh 或授权码交换时收到 `invalid_grant` / `reauth_required`，应自动转入一次新的浏览器授权流程。

@@ -87,7 +87,9 @@ export class LarkOIDC2OAuthServerProvider implements OAuthServerProvider {
     } catch (error: any) {
       const details = getAxiosErrorDetails(error);
       logger.error(`[LarkOIDC2OAuthServerProvider] getAppAccessToken failed: ${details.status} ${details.description}`);
-      throw new LarkServerError(`Failed to fetch app access token: ${details.status || 'unknown'} ${details.description}`);
+      throw new LarkServerError(
+        `Failed to fetch app access token: ${details.status || 'unknown'} ${details.description}`,
+      );
     }
   }
 

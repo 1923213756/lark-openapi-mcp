@@ -37,7 +37,10 @@ abstract class LarkOAuthError extends OAuthError {
 }
 
 export class LarkInvalidRequestError extends InvalidRequestError {
-  constructor(message: string, public readonly larkMcpError: LarkMcpOAuthErrorCode = 'invalid_request') {
+  constructor(
+    message: string,
+    public readonly larkMcpError: LarkMcpOAuthErrorCode = 'invalid_request',
+  ) {
     super(message);
   }
 
@@ -63,7 +66,10 @@ export class LarkInvalidClientError extends InvalidClientError {
 }
 
 export class LarkInvalidGrantError extends InvalidGrantError {
-  constructor(message: string, public readonly larkMcpError: LarkMcpOAuthErrorCode = 'invalid_grant') {
+  constructor(
+    message: string,
+    public readonly larkMcpError: LarkMcpOAuthErrorCode = 'invalid_grant',
+  ) {
     super(message);
   }
 

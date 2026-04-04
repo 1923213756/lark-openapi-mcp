@@ -43,12 +43,7 @@ function isLoopbackRedirect(redirectUri?: string) {
   }
 }
 
-function createErrorRedirect(
-  redirectUri: string,
-  error: OAuthError,
-  state?: string,
-  larkMcpError?: string,
-) {
+function createErrorRedirect(redirectUri: string, error: OAuthError, state?: string, larkMcpError?: string) {
   const errorUrl = new URL(redirectUri);
   errorUrl.searchParams.set('error', error.errorCode);
   errorUrl.searchParams.set('error_description', error.message);
@@ -102,7 +97,9 @@ export function larkAuthorizationHandler({ provider, rateLimit: rateLimitConfig 
         max: 100,
         standardHeaders: true,
         legacyHeaders: false,
-        message: new TooManyRequestsError('You have exceeded the rate limit for authorization requests').toResponseObject(),
+        message: new TooManyRequestsError(
+          'You have exceeded the rate limit for authorization requests',
+        ).toResponseObject(),
         ...rateLimitConfig,
       }),
     );

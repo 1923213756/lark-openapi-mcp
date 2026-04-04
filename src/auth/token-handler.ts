@@ -132,9 +132,9 @@ export function larkTokenHandler({ provider, rateLimit: rateLimitConfig }: Token
       if (error instanceof OAuthError) {
         const status = error instanceof ServerError ? 500 : 400;
         const body = error.toResponseObject();
-        res.status(status).json(
-          'lark_mcp_error' in body ? body : { ...body, lark_mcp_error: error.errorCode as string },
-        );
+        res
+          .status(status)
+          .json('lark_mcp_error' in body ? body : { ...body, lark_mcp_error: error.errorCode as string });
         return;
       }
 

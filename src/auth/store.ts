@@ -21,8 +21,10 @@ export class AuthStore implements OAuthRegisteredClientsStore {
   private isReloading = false;
   private isInitializedStorageSuccess = false;
 
-  constructor() {
-    this.initialize();
+  constructor(options: { autoInitialize?: boolean } = {}) {
+    if (options.autoInitialize !== false) {
+      this.initialize();
+    }
   }
 
   private normalizeStorageData(storageData?: StorageData): StorageData {
@@ -436,4 +438,4 @@ export class AuthStore implements OAuthRegisteredClientsStore {
   }
 }
 
-export const authStore = new AuthStore();
+export const authStore = new AuthStore({ autoInitialize: false });

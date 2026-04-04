@@ -11,8 +11,10 @@ export class StorageManager {
   private isInitializedStorageSuccess = false;
   private initializationError: Error | undefined;
 
-  constructor() {
-    this.initialize();
+  constructor(options: { autoInitialize?: boolean } = {}) {
+    if (options.autoInitialize !== false) {
+      this.initialize();
+    }
   }
 
   get storageFile(): string {
@@ -135,4 +137,4 @@ export class StorageManager {
   }
 }
 
-export const storageManager = new StorageManager();
+export const storageManager = new StorageManager({ autoInitialize: false });
